@@ -45,8 +45,5 @@ jobs:
           BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
         run: python scripts/check_branch_name.py "$BRANCH_NAME"
 
-      - name: Type-check
-        run: mypy src
-
-      - name: Test
-        run: pytest
+      - name: Type-check and test
+        run: python scripts/run_pre_push.py
