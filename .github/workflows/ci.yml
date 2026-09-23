@@ -40,6 +40,11 @@ jobs:
           python scripts/check_commit_message.py
           --range "${{ github.event.before }}..${{ github.sha }}"
 
+      - name: Validate branch name
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+        run: python scripts/check_branch_name.py "$BRANCH_NAME"
+
       - name: Type-check
         run: mypy src
 

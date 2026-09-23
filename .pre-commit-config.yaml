@@ -25,6 +25,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: branch-name
+        name: validate branch name
+        entry: python scripts/check_branch_name.py
+        language: python
+        stages: [pre-push]
+        pass_filenames: false
+
       - id: conventional-commit-message
         name: validate conventional commit message
         entry: python scripts/check_commit_message.py

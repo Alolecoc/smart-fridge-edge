@@ -45,7 +45,8 @@ This installs three hook stages:
   YAML, TOML, line endings, merge markers, file size and private keys.
 - `commit-msg`: rejects commit messages that do not follow Conventional
   Commits.
-- `pre-push`: runs Mypy and Pytest before code is sent to GitHub.
+- `pre-push`: validates the branch name, runs Mypy and runs Pytest before code
+  is sent to GitHub.
 
 If a formatting hook changes a file, the commit is deliberately stopped. Review
 the changes, stage them with `git add .`, and commit again. Bypassing hooks with
@@ -101,8 +102,12 @@ docs(hardware): add wiring diagram
 The intended flow is:
 
 ```text
-feature/* -> main -> prod -> version tag
+type/* -> main -> prod -> version tag
 ```
+
+Use `type/short-kebab-description` for development branches. Allowed types are
+`feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `ci`, and `experiment`.
+Examples include `fix/door-sensor` and `feat/camera-capture`.
 
 GitHub Actions runs on every pushed branch and every pull request. CI verifies
 the files, commit-message convention, static types and tests. Unlike local
