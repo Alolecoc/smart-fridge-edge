@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.pre-commit-cache/
 build/
 dist/
 *.egg-info/
@@ -12,4 +13,3 @@ data/events/
 models/*.onnx
 models/*.tflite
 models/*.hef
-
