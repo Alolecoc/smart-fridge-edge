@@ -13,6 +13,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
   "mypy>=1.11",
+  "pre-commit>=4.0",
   "pytest>=8.0",
   "ruff>=0.6",
 ]
@@ -37,4 +38,3 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.11"
 strict = true
 packages = ["smart_fridge"]
-
