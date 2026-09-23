@@ -34,7 +34,7 @@ through pull requests. `main` is the integration branch and may contain several
 new components that have passed automated tests but have not yet been validated
 together on the physical refrigerator.
 
-The `stable` branch contains only complete revisions that have been tested on
-the intended system. A tested commit is promoted from `main` to `stable` and
+The `prod` branch contains only complete revisions that have been tested on
+the intended system. A tested commit is promoted from `main` to `prod` and
 then marked with a semantic version tag such as `v0.2.0`. Development must not
-take place directly on `stable`.
+take place directly on `prod`.

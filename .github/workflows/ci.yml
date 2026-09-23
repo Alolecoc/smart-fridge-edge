@@ -2,7 +2,7 @@ name: Edge CI
 
 on:
   push:
-    branches: [main, stable]
+    branches: [main, prod]
   pull_request:
 
 permissions:

@@ -51,17 +51,17 @@ pytest
 ## Git workflow
 
 - `main` is the integration branch. Completed feature branches are merged here.
-- `stable` contains only versions that the group has tested and demonstrated as
+- `prod` contains only versions that the group has tested and demonstrated as
   complete working snapshots.
 - Create work from `main` in branches such as `feature/door-events` or
   `fix/camera-timeout`.
 - Open a pull request into `main`; merge only when CI passes and another member
   has reviewed the change.
 - When a revision on `main` has been tested as a complete system, promote that
-  exact revision to `stable` through a pull request.
-- Tag every promoted stable revision: `v0.1.0`, `v0.2.0`, and so on. Tags make
+  exact revision to `prod` through a pull request.
+- Tag every promoted production revision: `v0.1.0`, `v0.2.0`, and so on. Tags make
   the individual working versions permanent and easy to restore.
-- Never develop features directly on `stable`.
+- Never develop features directly on `prod`.
 
 Commit examples:
 
@@ -76,7 +76,7 @@ docs(hardware): add wiring diagram
 The intended flow is:
 
 ```text
-feature/* -> main -> stable -> version tag
+feature/* -> main -> prod -> version tag
 ```
 
 ## First milestones
