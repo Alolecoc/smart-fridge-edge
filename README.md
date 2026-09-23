@@ -50,14 +50,18 @@ pytest
 
 ## Git workflow
 
-- `main` must always contain a tested, working version.
+- `main` is the integration branch. Completed feature branches are merged here.
+- `stable` contains only versions that the group has tested and demonstrated as
+  complete working snapshots.
 - Create work from `main` in branches such as `feature/door-events` or
   `fix/camera-timeout`.
-- Open a pull request; merge only when CI passes and another member has reviewed
-  the change.
-- Mark complete working versions with tags: `v0.1.0`, `v0.2.0`, and so on.
-- Create a temporary `release/v0.2.0` branch only when a version needs a short
-  stabilization period. Delete it after release.
+- Open a pull request into `main`; merge only when CI passes and another member
+  has reviewed the change.
+- When a revision on `main` has been tested as a complete system, promote that
+  exact revision to `stable` through a pull request.
+- Tag every promoted stable revision: `v0.1.0`, `v0.2.0`, and so on. Tags make
+  the individual working versions permanent and easy to restore.
+- Never develop features directly on `stable`.
 
 Commit examples:
 
@@ -69,6 +73,12 @@ test(orchestrator): verify failed capture recovery
 docs(hardware): add wiring diagram
 ```
 
+The intended flow is:
+
+```text
+feature/* -> main -> stable -> version tag
+```
+
 ## First milestones
 
 1. Simulated door event creates a complete event record.
@@ -77,4 +87,3 @@ docs(hardware): add wiring diagram
 4. A second camera and controlled lighting are added.
 5. Radar is tested independently and then synchronized.
 6. A versioned exported model is integrated for inference.
-

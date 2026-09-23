@@ -2,7 +2,7 @@ name: Edge CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, stable]
   pull_request:
 
 permissions:
@@ -35,4 +35,3 @@ jobs:
 
       - name: Test
         run: pytest
-

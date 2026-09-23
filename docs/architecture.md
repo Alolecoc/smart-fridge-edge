@@ -27,3 +27,14 @@ IDLE --door opens--> DOOR_OPEN --door closes--> CAPTURING --> IDLE
 This prevents accidental duplicate recordings and makes error handling and
 testing clearer than a collection of unrelated callbacks.
 
+## Branching and releases
+
+Feature and fix branches are created from `main` and merged back into `main`
+through pull requests. `main` is the integration branch and may contain several
+new components that have passed automated tests but have not yet been validated
+together on the physical refrigerator.
+
+The `stable` branch contains only complete revisions that have been tested on
+the intended system. A tested commit is promoted from `main` to `stable` and
+then marked with a semantic version tag such as `v0.2.0`. Development must not
+take place directly on `stable`.
