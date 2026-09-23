@@ -79,7 +79,7 @@ pre-commit run --all-files
 - `main` is the integration branch. Completed feature branches are merged here.
 - `prod` contains only versions that the group has tested and demonstrated as
   complete working snapshots.
-- Create work from `main` in branches such as `feature/door-events` or
+- Create work from `main` in branches such as `feat/door-events` or
   `fix/camera-timeout`.
 - Open a pull request into `main`; merge only when CI passes and another member
   has reviewed the change.
