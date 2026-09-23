@@ -4,4 +4,3 @@ wait_after_close_seconds = 0.0
 log_level = "INFO"
 simulated_hardware = true
 camera_count = 1
-
