@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -33,10 +34,17 @@ def run(*arguments: str) -> None:
 def main() -> int:
     try:
         run("-m", "mypy", "src")
-        # Disable pytest's cache provider because hook environments do not need
-        # a persistent cache and Windows ownership differences can make an old
-        # cache directory unwritable.
-        run("-m", "pytest", "-p", "no:cacheprovider")
+        # Use a fresh temporary directory because a shared Windows pytest temp
+        # directory may have been created by another account or sandbox.
+        with tempfile.TemporaryDirectory(prefix="smart-fridge-pytest-") as temp_directory:
+            run(
+                "-m",
+                "pytest",
+                "-p",
+                "no:cacheprovider",
+                "--basetemp",
+                temp_directory,
+            )
     except subprocess.CalledProcessError as error:
         return error.returncode
     return 0
