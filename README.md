@@ -18,6 +18,18 @@ Door sensor -> Orchestrator/state machine -> Cameras/radar/lighting
 The current implementation uses simulated hardware. This lets us develop and
 test the event logic before the physical components arrive.
 
+Each completed door event is stored as a self-contained directory:
+
+```text
+data/events/<event-id>/
+├── metadata.json
+└── camera-1.txt
+```
+
+Runtime settings are defined in `config/default.toml`. The demonstration uses
+simulated hardware and writes timestamps, sensor names, output files and capture
+status to `metadata.json`.
+
 ## Development setup
 
 Python 3.11 or newer is recommended.
