@@ -4,6 +4,12 @@ Software running on the Raspberry Pi in the smart-fridge prototype. It handles
 door events, coordinates sensors, stores synchronized measurements, and later
 calls a separately trained machine-learning model for inference.
 
+The optional ML integration uses an edge-owned SQLite database and a JSON subprocess
+handoff. Start the queue worker and cleanup with
+`python run.py --config config/ml.toml --serve`.
+See [ML integration](docs/ml-integration.md) for model paths, acquisition mode,
+database tables and the three-run production retention policy.
+
 Model training and large datasets belong in a separate `smart-fridge-ml`
 repository. This repository only consumes an exported, versioned model.
 
@@ -12,7 +18,7 @@ repository. This repository only consumes an exported, versioned model.
 ```text
 Door sensor -> Orchestrator/state machine -> Cameras/radar/lighting
                               |             -> Event storage
-                              +------------- -> Inference adapter (later)
+                              +------------- -> SQLite queue -> ML subprocess -> Predictions
 ```
 
 The current implementation uses simulated hardware. This lets us develop and

@@ -39,6 +39,7 @@ class Orchestrator:
         wait_after_close_seconds: float = 0.0,
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
+        capture_suffix: str = ".txt",
     ) -> None:
         self.door = door
         self.lighting = lighting
@@ -47,6 +48,9 @@ class Orchestrator:
         self.wait_after_close_seconds = wait_after_close_seconds
         self.clock = clock or (lambda: datetime.now(UTC))
         self.sleeper = sleeper
+        if capture_suffix not in {".txt", ".jpg", ".png", ".ppm"}:
+            raise ValueError("unsupported camera file suffix")
+        self.capture_suffix = capture_suffix
         self.state = SystemState.IDLE
         self.door_opened_at: datetime | None = None
         self.logger = logging.getLogger(__name__)
@@ -80,7 +84,7 @@ class Orchestrator:
                 self.sleeper(self.wait_after_close_seconds)
             self.lighting.turn_on()
             for index, camera in enumerate(self.cameras):
-                output_name = f"camera-{index + 1}.txt"
+                output_name = f"camera-{index + 1}{self.capture_suffix}"
                 camera.capture(event_directory / output_name)
                 outputs.append(output_name)
             completed_at = self.clock()
