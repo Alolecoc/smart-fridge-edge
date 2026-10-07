@@ -4,37 +4,40 @@ Software running on the Raspberry Pi in the smart-fridge prototype. It handles
 door events, coordinates sensors, stores synchronized measurements, and later
 calls a separately trained machine-learning model for inference.
 
-The optional ML integration uses an edge-owned SQLite database and a JSON subprocess
-handoff. Start the queue worker and cleanup with
-`python run.py --config config/ml.toml --serve`.
-See [ML integration](docs/ml-integration.md) for model paths, acquisition mode,
-database tables and the three-run production retention policy.
+On the real fridge, the door switch starts video recording on both cameras (fridge
+opening and door). When the door closes, the recordings are cut into the moments
+where something moved, and each segment is queued for the ML repository. The ML
+repository decides what went in or out. Everything is stored in SQLite.
 
-Model training and large datasets belong in a separate `smart-fridge-ml`
-repository. This repository only consumes an exported, versioned model.
+```bash
+python run.py --config config/pi.toml --run          # live system on the Pi
+python run.py --config config/pi.toml --run --test   # also show clips in the review tool
+```
+
+See [ML integration](docs/ml-integration.md) for the event flow, modes, commands,
+database tables and retention. The Raspberry Pi setup (Hailo-8, cameras, door pin,
+services) is in `../grocery-product-detection/HOW-TO.md`.
+
+Model training and large datasets belong in the separate `grocery-product-detection`
+repository. This repository only consumes its exported models through `main.py`.
 
 ## Architecture
 
 ```text
-Door sensor -> Orchestrator/state machine -> Cameras/radar/lighting
-                              |             -> Event storage
-                              +------------- -> SQLite queue -> ML subprocess -> Predictions
+Door switch (GPIO) -> Orchestrator -> rpicam-vid per camera (while open)
+                          |
+                          +-> segmentation thread -> SQLite queue -> ML subprocess
+                                                                  -> predictions + movements
 ```
 
-The current implementation uses simulated hardware. This lets us develop and
-test the event logic before the physical components arrive.
+Hardware access is behind interfaces in `src/smart_fridge/hardware/`. Simulated
+implementations keep tests and CI free of GPIO and cameras; `raspberry_pi.py` holds the
+real door sensor and recorders. Runtime settings: `config/default.toml` (simulated demo),
+`config/ml.toml` (simulated hardware with ML, for `--submit`/`--serve`) and
+`config/pi.toml` (the real fridge).
 
-Each completed door event is stored as a self-contained directory:
-
-```text
-data/events/<event-id>/
-├── metadata.json
-└── camera-1.txt
-```
-
-Runtime settings are defined in `config/default.toml`. The demonstration uses
-simulated hardware and writes timestamps, sensor names, output files and capture
-status to `metadata.json`.
+Without an action, `python run.py` simulates one door event with placeholder recordings
+in `data/events/<event-id>/`.
 
 ## Development setup
 

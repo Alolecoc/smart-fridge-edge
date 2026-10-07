@@ -17,6 +17,13 @@ class Lighting(Protocol):
         """Turn off controlled refrigerator lighting."""
 
 
-class Camera(Protocol):
-    def capture(self, destination: Path) -> None:
-        """Capture one image and save it at destination."""
+class VideoRecorder(Protocol):
+    """One camera that records while the door is open."""
+
+    name: str
+
+    def start(self, destination: Path) -> None:
+        """Begin recording to destination; return once recording has started."""
+
+    def stop(self) -> Path:
+        """Finish the file cleanly and return its path."""

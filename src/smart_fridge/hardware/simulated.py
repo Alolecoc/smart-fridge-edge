@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,15 +25,27 @@ class SimulatedLighting:
 
 
 @dataclass
-class SimulatedCamera:
-    capture_count: int = 0
-    as_image: bool = False
+class SimulatedRecorder:
+    """Writes a sample clip (or a placeholder file) instead of using a camera."""
 
-    def capture(self, destination: Path) -> None:
+    name: str = "fridge"
+    sample: Path | None = None
+    recording: Path | None = None
+    recordings: int = 0
+
+    def start(self, destination: Path) -> None:
+        if self.recording is not None:
+            raise RuntimeError(f"{self.name} is already recording")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if self.as_image:
-            # A real RGB file for integration demos, not a realistic grocery scene.
-            destination.write_bytes(b"P6\n64 64\n255\n" + bytes((100, 120, 140)) * 64 * 64)
+        self.recording = destination
+
+    def stop(self) -> Path:
+        if self.recording is None:
+            raise RuntimeError(f"{self.name} is not recording")
+        path, self.recording = self.recording, None
+        if self.sample is not None:
+            shutil.copyfile(self.sample, path)
         else:
-            destination.write_text("simulated image\n", encoding="utf-8")
-        self.capture_count += 1
+            path.write_bytes(b"simulated video\n")
+        self.recordings += 1
+        return path

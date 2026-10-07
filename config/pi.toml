@@ -1,0 +1,58 @@
+# The real fridge: Raspberry Pi 5, AI HAT+ (Hailo-8), door switch and two cameras.
+# Start with: python run.py --config config/pi.toml --run   (add --test to monitor)
+[system]
+data_directory = "data/events"
+# Keep recording this long after the door closes, to see items placed at the last moment.
+wait_after_close_seconds = 0.5
+log_level = "INFO"
+simulated_hardware = false
+camera_count = 2
+
+[door]
+# BCM GPIO number of the door switch. Verify it (and open_level) on the Pi with:
+#   python run.py --config config/pi.toml --check-door
+gpio_pin = 17
+open_level = "high"  # Raw level when the door is OPEN (a reed switch to GND with pull-up: high).
+pull_up = true
+debounce_seconds = 0.1
+poll_interval_seconds = 0.05
+
+# Names must match the cameras in the ML repo's configs/video.yaml (fridge, door).
+# kind = "rpicam": Pi camera module on CSI port `index` (see: rpicam-hello --list-cameras)
+# kind = "v4l2":   USB camera at `device`, for example "/dev/video0"
+[cameras.fridge]
+kind = "rpicam"
+index = 0
+width = 1280
+height = 720
+fps = 30
+
+[cameras.door]
+kind = "rpicam"
+index = 1
+width = 1280
+height = 720
+fps = 30
+
+[segmentation]
+# Motion = mean grey-level change between frames (0-255). Calibrate with --analyse-motion.
+analysis_fps = 10.0
+motion_threshold = 3.0
+padding_seconds = 1.0
+merge_gap_seconds = 1.5
+min_segment_seconds = 0.5
+whole_clip_without_motion = true
+max_recording_seconds = 300.0
+
+[ml]
+enabled = true
+# Paths are relative to this repository, not the terminal working directory.
+repository = "../grocery-product-detection"
+python = "../grocery-product-detection/.venv/bin/python"
+model_config = "../grocery-product-detection/configs/video.yaml"
+models_directory = "../grocery-product-detection/models"
+database_directory = "database"
+mode = "production"
+retention_runs = 3
+purge_interval_seconds = 60.0
+timeout_seconds = 600.0

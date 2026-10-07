@@ -34,10 +34,18 @@ class MLService:
         try:
             cutoff = datetime.now(UTC) - timedelta(seconds=self.config.timeout_seconds + 60)
             self.database.recover(cutoff.isoformat())
-            if self.config.mode == "production":
-                self.database.purge(self.config.retention_runs)
+            # Only completed production/test runs are pruned; acquisition is kept.
+            self.database.purge(self.config.retention_runs)
         except Exception:
             logging.getLogger(__name__).exception("database maintenance failed; data retained")
+
+    def process_queue(self) -> None:
+        """Run ML on queued segments until stopped; used by --serve and --run."""
+        while not self.stop_event.is_set():
+            if self.worker.process_one():
+                self.maintain()
+            else:
+                self.stop_event.wait(1.0)
 
     def _maintenance(self) -> None:
         while not self.stop_event.wait(self.config.purge_interval_seconds):

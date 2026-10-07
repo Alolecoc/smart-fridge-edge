@@ -1,117 +1,104 @@
-# ML integration and SQLite
+# Live system, ML integration and SQLite
 
-The edge application owns SQLite and all persistent capture/result records. The ML
-repository is a subprocess in this chain; it receives JSON files and returns JSON.
-It neither opens nor writes the edge database. There are no PyTorch dependencies here.
+The edge application owns the door, the cameras, SQLite and every stored file. The ML
+repository (`grocery-product-detection`) is a subprocess in this chain: it receives one
+JSON request per video segment and returns JSON. It never opens the edge database.
+There are no PyTorch dependencies here.
 
-## Setup and one-command startup
+For the full Raspberry Pi setup, see `../grocery-product-detection/HOW-TO.md`.
 
-Keep the ML checkout next to this repository, or edit `[ml]` in `config/ml.toml`.
-Set `repository`, `python`, `model_config` and `models_directory` to your deployment.
-ML paths in this file resolve relative to the edge repository. The model directory
-contains `yolo/` and `vit/`; the ML YAML selects individual checkpoints.
+## What happens on a door event
+
+1. **Door opens** (GPIO switch, debounced): every camera in `[cameras]` starts recording
+   (`rpicam-vid` for Pi camera modules, `ffmpeg` for USB cameras).
+2. **Door closes**: recording continues for `wait_after_close_seconds`, then stops.
+   A door left open longer than `max_recording_seconds` is cut there.
+3. **Segmentation** (background thread): ffmpeg measures frame-to-frame change. Moments
+   above `motion_threshold` are padded, merged and cut into segments. With no motion at
+   all, the whole recording is queued (`whole_clip_without_motion`).
+4. **Queue**: each segment becomes a `captures` row with a schema 2 request
+   (`camera`, `video_path`, `offset_seconds` from the door opening).
+5. **ML** (background thread): `main.py` tracks objects, decides in/out with the zones
+   drawn in the review tool and classifies them. The result is validated and stored.
 
 ```bash
-python run.py --config config/ml.toml --serve
+python run.py --config config/pi.toml --run            # production
+python run.py --config config/pi.toml --run --test     # also publish to the review tool
+python run.py --config config/pi.toml --run --data-aquisition
 ```
 
-This starts the persistent SQLite queue worker and scheduled cleanup. Stop with
-Ctrl+C or SIGTERM. Captures can be submitted from another terminal:
+| Mode | ML flag | Full recordings | Segment files | Review tool |
+| --- | --- | --- | --- | --- |
+| `production` | `--production` | deleted after cutting | newest `retention_runs` kept | no |
+| `test` | `--test` | kept in `database/recordings/` | newest `retention_runs` kept | every clip + prediction |
+| `acquisition` | `--data-aquisition` | kept | kept, plus `acquisition_records` | no |
 
-```bash
-python run.py --config config/ml.toml --submit /path/shelf1.jpg --event-id door-001
-python run.py --config config/ml.toml --submit /path/shelf2.jpg --event-id door-001
-```
+## Commands
 
-Each submission prints a capture ID. Both images share the door event but have
-different capture IDs. `--captured-at` accepts a timestamp with timezone; otherwise
-the submission time is used. `--sensor`, `--metadata settings.json` and repeated
-`--attachment /path/raw.bin` preserve sensor identity, settings and raw IR/radar
-files. These files are copied before queueing, so their originals remain yours.
-
-For acquisition, add `--data-aquisition` (or `--data-acquisition`) when submitting.
-The row's mode is passed to ML; it is not changed by whichever worker processes it.
-Use `--capture-id ID` instead of `--serve` to process a pending record once.
-
-Without `--serve` or `--submit`, the existing one-door-event demo still runs. With
-`config/ml.toml` it captures valid but plain simulated RGB images, registers them,
-runs inference and starts/stops maintenance. With the original default config,
-the old text-file sensor demo is unchanged. Real camera/door/radar adapters remain
-future work; `--serve` currently processes submissions, not physical GPIO events.
+| Command | Purpose |
+| --- | --- |
+| `--run` | Live system (needs `simulated_hardware = false`) |
+| `--serve` | Only process queued segments and cleanup |
+| `--submit clip.mp4 --camera fridge [--event-id ID]` | Segment and queue a recorded clip like a door event |
+| `--capture-id ID` | Process one pending segment now |
+| `--check-door [--pin N]` | Print the door switch level live, to find the pin and `open_level` |
+| `--check-cameras` | Record 3 s from every camera |
+| `--analyse-motion clip.mp4` | Print motion levels and the resulting segments, to tune `motion_threshold` |
+| `--export-acquisition file.json` | Export acquisition results |
 
 ## Storage
 
-`database/fridge.sqlite3` is initialized automatically with WAL and foreign keys:
+`database/fridge.sqlite3` (WAL, foreign keys) holds everything:
 
 | Table | Purpose |
 | --- | --- |
-| `events` | Door event ID, timestamps/settings in event metadata |
-| `captures` | Capture ID, event ID, mode, capture/create timestamps, input JSON, queue state |
-| `inference_runs` | Run ID, capture/event IDs, start/end times, status, errors, artifact directory |
-| `predictions` | Output classification JSON for each successful run |
-| `acquisition_records` | Persistent acquisition input/output JSON, linked to event/capture/run |
+| `events` | Door event ID; metadata JSON with open/close times, cameras, mode, errors |
+| `recordings` | One full recording per camera: duration, motion statistics, segments, kept path |
+| `captures` | One queued segment: mode, request JSON (camera, offset, segment times), status |
+| `inference_runs` | One ML attempt: start/end, status, error, artifact directory |
+| `predictions` | The full ML result JSON (tracks, movements, models, zones, warnings) |
+| `movements` | One row per item moved: event, camera, track, `in`/`out`, category, confidence, event time |
+| `acquisition_records` | Persistent input/result copies in acquisition mode |
 
-Original pixels and raw sensor files are kept under `database/captures/<capture-id>`.
-Requests, logs, masks, crops and result JSON live under `database/runs/<run-id>`.
-Binary data is stored as files, not SQLite blobs. The database, files and their
-backups belong together. Runtime data is ignored by Git.
+What went in or out during a door event:
+
+```sql
+SELECT camera, direction, category, confidence, start_seconds
+FROM movements WHERE event_id = ? ORDER BY start_seconds;
+```
+
+Files: `database/captures/<capture-id>/clip.mp4` (segments),
+`database/runs/<run-id>/` (request, result, log, ML working copy and crops),
+`database/recordings/<event-id>/` (full recordings in test/acquisition mode).
+The database version is stored in `PRAGMA user_version`; older databases from the
+image-based integration are migrated automatically.
 
 The edge invokes the ML process without a shell:
 
 ```text
-<ml-python> <ml-repo>/main.py --production|--data-aquisition
+<ml-python> <ml-repo>/main.py --production|--test|--data-aquisition
   --record-id <capture-id> --request <absolute-request.json>
-  --output <absolute-result.json> --config <model-config>
+  --output <absolute-result.json> --config <video.yaml>
   --models-dir <model-root> --managed-retention
 ```
 
-Contract schema version is 1. Requests contain `capture_id`, `event_id`, `captured_at`,
-`sensor`, absolute `image_path`, `sensor_metadata` and `attachments`. Results contain
-the same IDs, `mode`, model timestamps, `objects` and category counts. Each object
-has a category, box, polygon and scores. The edge rejects wrong IDs/modes or invalid
-result structure; a failed/timed-out process records an error without discarding raw
-files. Empty predictions are valid and do not imply an empty fridge.
+Requests and results follow the ML repository's `documentation/CONTRACT.md` (schema 2).
+The edge rejects mismatched IDs/modes, wrong schema and malformed movements. A failed or
+timed-out process records an error without discarding the segment.
 
 ## Retention
 
-`retention_runs = 3` keeps artifacts for the newest **three successful production
-image runs**, including the current run, across all cameras/events. This is not
-three door events. Choose a higher number if several shelves must remain available.
-Cleanup runs at startup, after processing, and every `purge_interval_seconds`.
-
-Cleanup deletes only managed capture/run folders, never external source files.
-It retains category/count history in SQLite, removes expired paths/polygons from
-prediction JSON and marks records with `purged_at`. Acquisition, pending and failed
-captures are excluded. Acquisition files and records persist until explicitly
-managed by a person. Older failed logs/captures require manual attention.
-Already purged input paths remain in `captures.input_json` as historical provenance;
-check `purged_at` before attempting to open them.
-
-ML's standalone retention is disabled by `--managed-retention`; only the edge owns
-cleanup in this integration. The worker uses a configurable subprocess timeout.
-Jobs still marked running after timeout plus 60 seconds are marked failed, not
-silently retried. Resubmit a capture for an explicit new attempt.
-
-## Review acquisition data
-
-```bash
-python run.py --config config/ml.toml --export-acquisition database/acquisition.json
-```
-
-In the ML checkout:
-
-```bash
-python -m utils.import_acquisition ../smart-fridge-edge/database/acquisition.json --split train
-python annotation_tool/run.py
-```
-
-This imports existing predictions without another network run. The local review
-workspace owns draft edits; the edge acquisition rows preserve the original raw
-observations and predictions. Training is always a separate explicit ML command.
+`retention_runs = 3` keeps the files of the newest three successful production/test
+**segments** across all cameras and events. Older segment and run folders are deleted;
+their movements, categories and result JSON stay in SQLite and are marked `purged_at`.
+Acquisition, pending and failed captures are never purged. Cleanup runs at startup,
+after each ML run and every `purge_interval_seconds`. Jobs still marked running after
+`timeout_seconds` plus 60 seconds are marked failed and not retried silently.
 
 ## Validation
 
-Use the repository's existing pre-commit hooks and `scripts/run_pre_push.py`.
-Tests cover grouping, subprocess handoff, failure retention, acquisition persistence,
-safe purging and worker shutdown using small fake model outputs. They do not train
-models or establish physical sensor/accelerator performance.
+`scripts/run_pre_push.py` runs Mypy and Pytest. The tests cover the recording state
+machine, debouncing, motion segmentation with real ffmpeg clips, the live loop from door
+open to stored movements (with a fake ML process), the subprocess contract for every
+mode, retention, the database migration and config validation. They do not use physical
+cameras, GPIO or the Hailo accelerator.

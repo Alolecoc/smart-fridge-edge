@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from smart_fridge.config import MLConfig
 from smart_fridge.database import Database
+
+MODE_FLAGS = {"production": "--production", "acquisition": "--data-aquisition", "test": "--test"}
 
 
 class InferenceWorker:
@@ -26,11 +29,11 @@ class InferenceWorker:
         try:
             result = self._invoke(job)
             self.database.complete(job, result)
+            for warning in result.get("warnings", []):
+                logging.getLogger(__name__).warning("%s: %s", job["capture_id"], warning)
         except Exception as error:
             self.database.fail(job, str(error))
             # Keep the daemon alive so another capture can still be processed.
-            import logging
-
             logging.getLogger(__name__).exception("inference failed for %s", job["capture_id"])
         return True
 
@@ -43,7 +46,7 @@ class InferenceWorker:
         command = [
             str(self.config.python),
             str(self.config.repository / "main.py"),
-            "--data-aquisition" if job["mode"] == "acquisition" else "--production",
+            MODE_FLAGS[job["mode"]],
             "--record-id",
             job["capture_id"],
             "--request",

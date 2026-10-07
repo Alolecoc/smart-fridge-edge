@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import sqlite3
 from collections.abc import Iterator
@@ -12,9 +13,26 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from smart_fridge.config import MODES
+
+SCHEMA_VERSION = 2
+DIRECTIONS = ("in", "out")
+
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+CAPTURES_TABLE = """
+    CREATE TABLE IF NOT EXISTS captures (
+        capture_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES events(event_id),
+        mode TEXT NOT NULL CHECK(mode IN ('production', 'acquisition', 'test')),
+        captured_at TEXT NOT NULL, created_at TEXT NOT NULL,
+        input_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+        purged_at TEXT);
+"""
 
 
 class Database:
@@ -24,18 +42,23 @@ class Database:
         self.path = self.root / "fridge.sqlite3"
         with self.connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
-            connection.executescript("""
+            if connection.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+                self._migrate(connection)
+            connection.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS events (
                     event_id TEXT PRIMARY KEY, created_at TEXT NOT NULL,
                     metadata_json TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS captures (
-                    capture_id TEXT PRIMARY KEY,
+                """
+                + CAPTURES_TABLE
+                + """
+                CREATE TABLE IF NOT EXISTS recordings (
+                    recording_id TEXT PRIMARY KEY,
                     event_id TEXT NOT NULL REFERENCES events(event_id),
-                    mode TEXT NOT NULL CHECK(mode IN ('production', 'acquisition')),
-                    captured_at TEXT NOT NULL, created_at TEXT NOT NULL,
-                    input_json TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending', error TEXT,
-                    purged_at TEXT);
+                    camera TEXT NOT NULL, started_at TEXT NOT NULL,
+                    duration_seconds REAL, path TEXT, kept INTEGER NOT NULL,
+                    status TEXT NOT NULL, error TEXT, segments_json TEXT NOT NULL,
+                    motion_json TEXT NOT NULL, created_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS inference_runs (
                     run_id TEXT PRIMARY KEY,
                     capture_id TEXT NOT NULL REFERENCES captures(capture_id),
@@ -49,6 +72,16 @@ class Database:
                     event_id TEXT NOT NULL REFERENCES events(event_id),
                     created_at TEXT NOT NULL, result_json TEXT NOT NULL,
                     purged_at TEXT);
+                CREATE TABLE IF NOT EXISTS movements (
+                    movement_id INTEGER PRIMARY KEY,
+                    run_id TEXT NOT NULL REFERENCES inference_runs(run_id),
+                    capture_id TEXT NOT NULL REFERENCES captures(capture_id),
+                    event_id TEXT NOT NULL REFERENCES events(event_id),
+                    camera TEXT NOT NULL, track_id TEXT NOT NULL,
+                    direction TEXT NOT NULL CHECK(direction IN ('in', 'out')),
+                    category TEXT NOT NULL, confidence REAL,
+                    start_seconds REAL NOT NULL, end_seconds REAL NOT NULL,
+                    created_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS acquisition_records (
                     run_id TEXT PRIMARY KEY REFERENCES inference_runs(run_id),
                     capture_id TEXT NOT NULL REFERENCES captures(capture_id),
@@ -57,9 +90,36 @@ class Database:
                     result_json TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS captures_pending ON captures(status, created_at);
                 CREATE INDEX IF NOT EXISTS captures_event ON captures(event_id);
+                CREATE INDEX IF NOT EXISTS recordings_event ON recordings(event_id);
+                CREATE INDEX IF NOT EXISTS movements_event ON movements(event_id);
                 CREATE INDEX IF NOT EXISTS runs_retention
                     ON inference_runs(mode, status, completed_at);
-            """)
+                """
+            )
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        """Version 1 captures only allowed production/acquisition; add test mode."""
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'captures'"
+        ).fetchone()
+        if exists is None:
+            return
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.executescript(
+            "BEGIN;"
+            + CAPTURES_TABLE.replace("EXISTS captures", "EXISTS captures_new")
+            + """
+            INSERT INTO captures_new SELECT capture_id, event_id, mode, captured_at,
+                created_at, input_json, status, error, purged_at FROM captures;
+            DROP TABLE captures;
+            ALTER TABLE captures_new RENAME TO captures;
+            COMMIT;
+            """
+        )
+        connection.execute("PRAGMA foreign_keys=ON")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -72,52 +132,97 @@ class Database:
         finally:
             connection.close()
 
-    def enqueue(
+    # ------------------------------------------------------------
+    # DOOR EVENTS, FULL RECORDINGS AND QUEUED SEGMENTS
+    # ------------------------------------------------------------
+    def record_event(self, event_id: str, metadata: dict[str, Any]) -> None:
+        """Create or update the door event, keeping its open/close times and settings."""
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO events VALUES (?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET metadata_json = excluded.metadata_json""",
+                (event_id, now(), json.dumps(metadata)),
+            )
+
+    def add_recording(
         self,
         *,
         event_id: str,
-        image: Path,
-        mode: str,
-        sensor: str = "rgb-1",
-        captured_at: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        attachments: list[dict[str, Any]] | None = None,
-        event_metadata: dict[str, Any] | None = None,
+        camera: str,
+        started_at: str,
+        path: Path | None,
+        kept: bool,
+        status: str,
+        duration_seconds: float | None = None,
+        segments: list[dict[str, Any]] | None = None,
+        motion: dict[str, Any] | None = None,
+        error: str | None = None,
     ) -> str:
-        """Copy raw files into managed storage before queueing one RGB observation."""
-        if mode not in ("production", "acquisition") or not event_id or not sensor:
-            raise ValueError("mode, event_id and sensor are required")
+        recording_id = uuid4().hex
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO recordings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    recording_id,
+                    event_id,
+                    camera,
+                    started_at,
+                    duration_seconds,
+                    str(path) if path else None,
+                    int(kept),
+                    status,
+                    error,
+                    json.dumps(segments or []),
+                    json.dumps(motion or {}),
+                    now(),
+                ),
+            )
+        return recording_id
+
+    def enqueue_video(
+        self,
+        *,
+        event_id: str,
+        video: Path,
+        camera: str,
+        mode: str,
+        captured_at: str | None = None,
+        offset_seconds: float = 0.0,
+        segment: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        move: bool = False,
+    ) -> str:
+        """Move or copy one clip into managed storage and queue it for ML (schema 2)."""
+        if mode not in MODES or not event_id or not camera:
+            raise ValueError("mode, event_id and camera are required")
         timestamp = captured_at or now()
         if datetime.fromisoformat(timestamp).tzinfo is None:
             raise ValueError("captured_at must include a timezone")
-        if not image.is_file():
-            raise ValueError(f"missing image: {image}")
+        if not video.is_file():
+            raise ValueError(f"missing video: {video}")
+        if not math.isfinite(offset_seconds) or offset_seconds < 0:
+            raise ValueError("offset_seconds must be a non-negative number")
         capture_id = uuid4().hex
         folder = self.root / "captures" / capture_id
         folder.mkdir(parents=True)
         try:
-            target = folder / ("image" + image.suffix.lower())
-            shutil.copy2(image, target)
-            copied = []
-            for index, attachment in enumerate(attachments or []):
-                source = Path(attachment["path"])
-                destination = folder / f"sensor-{index}{source.suffix}"
-                shutil.copy2(source, destination)
-                copied.append({**attachment, "path": str(destination)})
+            target = folder / ("clip" + video.suffix.lower())
+            (shutil.move if move else shutil.copy2)(video, target)
             payload = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "capture_id": capture_id,
                 "event_id": event_id,
                 "captured_at": timestamp,
-                "sensor": sensor,
-                "image_path": str(target),
+                "camera": camera,
+                "video_path": str(target),
+                "offset_seconds": round(offset_seconds, 3),
+                "segment": segment or {},
                 "sensor_metadata": metadata or {},
-                "attachments": copied,
+                "attachments": [],
             }
             with self.connect() as connection:
                 connection.execute(
-                    "INSERT OR IGNORE INTO events VALUES (?, ?, ?)",
-                    (event_id, now(), json.dumps(event_metadata or {})),
+                    "INSERT OR IGNORE INTO events VALUES (?, ?, ?)", (event_id, now(), "{}")
                 )
                 connection.execute(
                     """INSERT INTO captures
@@ -171,22 +276,38 @@ class Database:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix(destination.suffix + ".tmp")
         temporary.write_text(
-            json.dumps({"schema_version": 1, "records": records}, indent=2), encoding="utf-8"
+            json.dumps({"schema_version": 2, "records": records}, indent=2), encoding="utf-8"
         )
         temporary.replace(destination)
 
-    def complete(self, job: dict[str, Any], result: dict[str, Any]) -> None:
-        """Only accept results matching the reserved capture and door event."""
+    # ------------------------------------------------------------
+    # ML RESULTS: FULL JSON IN predictions, ONE ROW PER MOVEMENT
+    # ------------------------------------------------------------
+    @staticmethod
+    def validate_result(job: dict[str, Any], result: dict[str, Any]) -> list[dict[str, Any]]:
         for key in ("capture_id", "event_id", "mode"):
             if result.get(key) != job[key]:
                 raise ValueError(f"ML result has a mismatched {key}")
-        if result.get("schema_version") != 1 or not isinstance(result.get("objects"), list):
+        if result.get("schema_version") != 2:
             raise ValueError("invalid ML result schema")
-        if any(
-            not isinstance(item, dict) or not isinstance(item.get("category"), str)
-            for item in result["objects"]
-        ):
-            raise ValueError("invalid ML object records")
+        movements = result.get("movements")
+        if not isinstance(movements, list) or not isinstance(result.get("tracks"), list):
+            raise ValueError("ML result needs movements and tracks lists")
+        for movement in movements:
+            if (
+                not isinstance(movement, dict)
+                or movement.get("direction") not in DIRECTIONS
+                or not isinstance(movement.get("category"), str)
+                or not isinstance(movement.get("start"), int | float)
+                or not isinstance(movement.get("end"), int | float)
+            ):
+                raise ValueError("invalid ML movement record")
+        return movements
+
+    def complete(self, job: dict[str, Any], result: dict[str, Any]) -> None:
+        """Only accept results matching the reserved capture and door event."""
+        movements = self.validate_result(job, result)
+        camera = json.loads(job["input_json"]).get("camera", "")
         encoded = json.dumps(result, allow_nan=False)
         timestamp = now()
         with self.connect() as connection:
@@ -206,6 +327,25 @@ class Database:
                 "INSERT INTO predictions VALUES (?, ?, ?, ?, ?, NULL)",
                 (job["run_id"], job["capture_id"], job["event_id"], timestamp, encoded),
             )
+            for movement in movements:
+                connection.execute(
+                    """INSERT INTO movements (run_id, capture_id, event_id, camera, track_id,
+                    direction, category, confidence, start_seconds, end_seconds, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job["run_id"],
+                        job["capture_id"],
+                        job["event_id"],
+                        camera,
+                        str(movement.get("track_id", "")),
+                        movement["direction"],
+                        movement["category"],
+                        movement.get("classification_confidence"),
+                        float(movement["start"]),
+                        float(movement["end"]),
+                        timestamp,
+                    ),
+                )
             if job["mode"] == "acquisition":
                 connection.execute(
                     "INSERT INTO acquisition_records VALUES (?, ?, ?, ?, ?, ?)",
@@ -254,7 +394,7 @@ class Database:
                 )
 
     def purge(self, keep: int) -> int:
-        """Prune only owned files from successful production runs, never acquisition."""
+        """Prune owned files of older successful production/test runs, never acquisition."""
         if keep < 1:
             raise ValueError("retention_runs must be at least 1")
         count = 0
@@ -265,7 +405,7 @@ class Database:
             rows = connection.execute(
                 """SELECT r.*, p.result_json FROM inference_runs r
                 JOIN predictions p USING(run_id)
-                WHERE r.mode = 'production' AND r.status = 'completed'
+                WHERE r.mode IN ('production', 'test') AND r.status = 'completed'
                 ORDER BY r.completed_at DESC, r.rowid DESC LIMIT -1 OFFSET ?""",
                 (keep,),
             ).fetchall()
@@ -284,13 +424,13 @@ class Database:
                         raise ValueError("refusing to purge outside managed storage")
                     if directory.exists():
                         shutil.rmtree(directory)
+                # Movements, categories and track paths stay; only file paths are removed.
                 result = json.loads(row["result_json"])
                 result["artifacts_purged"] = True
-                for key in ("image_path", "annotated_path", "attachments"):
+                for key in ("source", "attachments"):
                     result.pop(key, None)
-                for item in result["objects"]:
-                    for key in ("polygon", "mask_path", "crop_path"):
-                        item.pop(key, None)
+                for track in result.get("tracks", []):
+                    track.pop("crop_file", None)
                 connection.execute(
                     "UPDATE predictions SET result_json = ?, purged_at = ? WHERE run_id = ?",
                     (json.dumps(result), now(), row["run_id"]),
