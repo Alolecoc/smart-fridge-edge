@@ -22,6 +22,12 @@ indices = [0, 1]
 width = 2304
 height = 1296
 capture_delay_ms = 1500
+
+[door]
+backend = "gpio"
+gpio_pin = 17
+bounce_time_seconds = 0.1
+poll_interval_seconds = 0.02
 """.strip(),
         encoding="utf-8",
     )
@@ -38,6 +44,10 @@ capture_delay_ms = 1500
     assert config.camera_width == 2304
     assert config.camera_height == 1296
     assert config.camera_capture_delay_ms == 1500
+    assert config.door_backend == "gpio"
+    assert config.door_gpio_pin == 17
+    assert config.door_bounce_time_seconds == 0.1
+    assert config.door_poll_interval_seconds == 0.02
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Event-driven edge software for the Smart Fridge project"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["gpiozero>=2.0,<3"]
 
 [project.optional-dependencies]
 dev = [
