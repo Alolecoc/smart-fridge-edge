@@ -12,6 +12,10 @@ from smart_fridge.orchestrator import Orchestrator, SystemState
 
 
 class FailingCamera:
+    @property
+    def file_extension(self) -> str:
+        return ".jpg"
+
     def capture(self, destination: Path) -> None:
         raise RuntimeError("simulated camera failure")
 

@@ -80,7 +80,7 @@ class Orchestrator:
                 self.sleeper(self.wait_after_close_seconds)
             self.lighting.turn_on()
             for index, camera in enumerate(self.cameras):
-                output_name = f"camera-{index + 1}.txt"
+                output_name = f"camera-{index + 1}{camera.file_extension}"
                 camera.capture(event_directory / output_name)
                 outputs.append(output_name)
             completed_at = self.clock()

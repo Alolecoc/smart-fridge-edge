@@ -15,6 +15,19 @@ wait_after_close_seconds = 1.25
 log_level = "debug"
 simulated_hardware = true
 camera_count = 2
+
+[camera]
+backend = "rpicam"
+indices = [0, 1]
+width = 2304
+height = 1296
+capture_delay_ms = 1500
+
+[door]
+backend = "gpio"
+gpio_pin = 17
+bounce_time_seconds = 0.1
+poll_interval_seconds = 0.02
 """.strip(),
         encoding="utf-8",
     )
@@ -26,6 +39,15 @@ camera_count = 2
     assert config.log_level == "DEBUG"
     assert config.simulated_hardware is True
     assert config.camera_count == 2
+    assert config.camera_backend == "rpicam"
+    assert config.camera_indices == (0, 1)
+    assert config.camera_width == 2304
+    assert config.camera_height == 1296
+    assert config.camera_capture_delay_ms == 1500
+    assert config.door_backend == "gpio"
+    assert config.door_gpio_pin == 17
+    assert config.door_bounce_time_seconds == 0.1
+    assert config.door_poll_interval_seconds == 0.02
 
 
 @pytest.mark.parametrize(

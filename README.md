@@ -15,8 +15,8 @@ Door sensor -> Orchestrator/state machine -> Cameras/radar/lighting
                               +------------- -> Inference adapter (later)
 ```
 
-The current implementation uses simulated hardware. This lets us develop and
-test the event logic before the physical components arrive.
+The door sensor and lighting currently use simulated hardware. Cameras can use
+either the simulation or Raspberry Pi's `rpicam-still` command.
 
 Each completed door event is stored as a self-contained directory:
 
@@ -29,6 +29,37 @@ data/events/<event-id>/
 Runtime settings are defined in `config/default.toml`. The demonstration uses
 simulated hardware and writes timestamps, sensor names, output files and capture
 status to `metadata.json`.
+
+To capture one event with both CSI cameras on a Raspberry Pi, set:
+
+```toml
+[camera]
+backend = "rpicam"
+indices = [0, 1]
+width = 2304
+height = 1296
+capture_delay_ms = 2000
+```
+
+With the simulated door backend, running `smart-fridge` simulates one door
+open/close event while saving real camera images. The GPIO backend instead keeps
+the process running and creates an event whenever the physical door opens and
+then closes.
+
+For a normally-open reed switch wired between BCM GPIO17 (physical pin 11) and
+GND, enable continuous door monitoring with:
+
+```toml
+[door]
+backend = "gpio"
+gpio_pin = 17
+bounce_time_seconds = 0.05
+poll_interval_seconds = 0.05
+```
+
+The internal pull-up is enabled by the GPIO implementation, so no external
+pull-up resistor or 3.3 V connection is required. The switch reads closed when
+the magnet is near and open when the magnet moves away.
 
 ## Development setup
 

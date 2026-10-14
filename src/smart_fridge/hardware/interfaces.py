@@ -18,5 +18,9 @@ class Lighting(Protocol):
 
 
 class Camera(Protocol):
+    @property
+    def file_extension(self) -> str:
+        """Return the file extension produced by this camera."""
+
     def capture(self, destination: Path) -> None:
         """Capture one image and save it at destination."""

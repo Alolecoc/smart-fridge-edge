@@ -4,3 +4,16 @@ wait_after_close_seconds = 0.0
 log_level = "INFO"
 simulated_hardware = true
 camera_count = 1
+
+[camera]
+backend = "simulated"
+indices = [0, 1]
+width = 2304
+height = 1296
+capture_delay_ms = 2000
+
+[door]
+backend = "simulated"
+gpio_pin = 17
+bounce_time_seconds = 0.05
+poll_interval_seconds = 0.05
