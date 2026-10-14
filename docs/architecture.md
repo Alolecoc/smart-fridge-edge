@@ -8,6 +8,10 @@ separate `smart-fridge-ml` repository.
 
 ## Why Python
 
+The optional inference integration is documented in [ml-integration.md](ml-integration.md).
+The edge owns SQLite and file retention. The separate ML repository receives capture
+requests and returns classification JSON; training code is not imported into edge.
+
 Python is the primary implementation language because it has strong Raspberry
 Pi camera, GPIO and machine-learning support and enables rapid prototyping. A
 C or C++ component should be added only if required by a vendor SDK, hard

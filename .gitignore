@@ -13,3 +13,5 @@ data/events/
 models/*.onnx
 models/*.tflite
 models/*.hef
+database/*
+!database/.gitkeep
