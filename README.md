@@ -15,8 +15,8 @@ Door sensor -> Orchestrator/state machine -> Cameras/radar/lighting
                               +------------- -> Inference adapter (later)
 ```
 
-The current implementation uses simulated hardware. This lets us develop and
-test the event logic before the physical components arrive.
+The door sensor and lighting currently use simulated hardware. Cameras can use
+either the simulation or Raspberry Pi's `rpicam-still` command.
 
 Each completed door event is stored as a self-contained directory:
 
@@ -29,6 +29,21 @@ data/events/<event-id>/
 Runtime settings are defined in `config/default.toml`. The demonstration uses
 simulated hardware and writes timestamps, sensor names, output files and capture
 status to `metadata.json`.
+
+To capture one event with both CSI cameras on a Raspberry Pi, set:
+
+```toml
+[camera]
+backend = "rpicam"
+indices = [0, 1]
+width = 2304
+height = 1296
+capture_delay_ms = 2000
+```
+
+Running `smart-fridge` then simulates one door open/close event while saving real
+camera images. The GPIO door sensor will replace that simulated trigger in a
+separate hardware feature.
 
 ## Development setup
 

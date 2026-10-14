@@ -2,6 +2,8 @@ import argparse
 from pathlib import Path
 
 from smart_fridge.config import load_config
+from smart_fridge.hardware.interfaces import Camera
+from smart_fridge.hardware.rpicam import RpiCamera
 from smart_fridge.hardware.simulated import (
     SimulatedCamera,
     SimulatedDoorSensor,
@@ -18,12 +20,21 @@ def main() -> None:
     config = load_config(arguments.config)
     configure_logging(config.log_level)
 
-    if not config.simulated_hardware:
-        raise RuntimeError("real hardware adapters have not been implemented yet")
-
     door = SimulatedDoorSensor()
     lighting = SimulatedLighting()
-    cameras = [SimulatedCamera() for _ in range(config.camera_count)]
+    cameras: list[Camera]
+    if config.camera_backend == "rpicam":
+        cameras = [
+            RpiCamera(
+                camera_index=index,
+                width=config.camera_width,
+                height=config.camera_height,
+                capture_delay_ms=config.camera_capture_delay_ms,
+            )
+            for index in config.camera_indices
+        ]
+    else:
+        cameras = [SimulatedCamera() for _ in range(config.camera_count)]
     system = Orchestrator(
         door,
         lighting,

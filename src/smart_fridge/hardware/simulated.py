@@ -27,6 +27,10 @@ class SimulatedLighting:
 class SimulatedCamera:
     capture_count: int = 0
 
+    @property
+    def file_extension(self) -> str:
+        return ".txt"
+
     def capture(self, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text("simulated image\n", encoding="utf-8")
