@@ -4,19 +4,49 @@ Software running on the Raspberry Pi in the smart-fridge prototype. It handles
 door events, coordinates sensors, stores synchronized measurements, and later
 calls a separately trained machine-learning model for inference.
 
-Model training and large datasets belong in a separate `smart-fridge-ml`
-repository. This repository only consumes an exported, versioned model.
+On the real fridge, the door switch starts video recording on both cameras (fridge
+opening and door). When the door closes, the recordings are cut into the moments
+where something moved, and each segment is queued for the ML repository. The ML
+repository decides what went in or out. Everything is stored in SQLite.
+
+```bash
+python run.py --config config/pi.toml --run          # live system on the Pi
+python run.py --config config/pi.toml --run --test   # also show clips in the review tool
+```
+
+See [ML integration](docs/ml-integration.md) for the event flow, modes, commands,
+database tables and retention. The Raspberry Pi setup (Hailo-8, cameras, door pin,
+services) is in `../grocery-product-detection/HOW-TO.md`.
+
+`config/pi.toml` is a hardware configuration template. Keep the deployed Pi's
+camera count, resolution, frame rate and rotation settings local. Camera rotation
+supports 0, 90, 180 and 270 degrees; quarter turns are processed with FFmpeg.
+
+The Pi setup installs `scripts/smartfridge` as the `smartfridge` command. Run
+`smartfridge help` for service, mode and review controls. After stopping the live
+service, `smartfridge clear live|acq|test` deletes the selected mode's managed
+recordings and database records while preserving the other modes.
+
+Model training and large datasets belong in the separate `grocery-product-detection`
+repository. This repository only consumes its exported models through `main.py`.
 
 ## Architecture
 
 ```text
-Door sensor -> Orchestrator/state machine -> Cameras/radar/lighting
-                              |             -> Event storage
-                              +------------- -> Inference adapter (later)
+Door switch (GPIO) -> Orchestrator -> rpicam-vid per camera (while open)
+                          |
+                          +-> segmentation thread -> SQLite queue -> ML subprocess
+                                                                  -> predictions + movements
 ```
 
-The current implementation uses simulated hardware. This lets us develop and
-test the event logic before the physical components arrive.
+Hardware access is behind interfaces in `src/smart_fridge/hardware/`. Simulated
+implementations keep tests and CI free of GPIO and cameras; `raspberry_pi.py` holds the
+real door sensor and recorders. Runtime settings: `config/default.toml` (simulated demo),
+`config/ml.toml` (simulated hardware with ML, for `--submit`/`--serve`) and
+`config/pi.toml` (the real fridge).
+
+Without an action, `python run.py` simulates one door event with placeholder recordings
+in `data/events/<event-id>/`.
 
 ## Development setup
 
@@ -33,6 +63,26 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
+Install the repository's Git hooks once per clone:
+
+```bash
+pre-commit install --install-hooks
+```
+
+This installs three hook stages:
+
+- `pre-commit`: fixes formatting where possible and validates Python, JSON,
+  YAML, TOML, line endings, merge markers, file size and private keys.
+- `commit-msg`: rejects commit messages that do not follow Conventional
+  Commits.
+- `pre-push`: validates the branch name, runs Mypy and runs Pytest before code
+  is sent to GitHub.
+
+If a formatting hook changes a file, the commit is deliberately stopped. Review
+the changes, stage them with `git add .`, and commit again. Bypassing hooks with
+`--no-verify` should be reserved for exceptional recovery work; GitHub CI still
+performs the same validation.
+
 Run the demonstration:
 
 ```bash
@@ -48,16 +98,26 @@ mypy src
 pytest
 ```
 
+Run all fast file checks manually with:
+
+```bash
+pre-commit run --all-files
+```
+
 ## Git workflow
 
-- `main` must always contain a tested, working version.
-- Create work from `main` in branches such as `feature/door-events` or
+- `main` is the integration branch. Completed feature branches are merged here.
+- `prod` contains only versions that the group has tested and demonstrated as
+  complete working snapshots.
+- Create work from `main` in branches such as `feat/door-events` or
   `fix/camera-timeout`.
-- Open a pull request; merge only when CI passes and another member has reviewed
-  the change.
-- Mark complete working versions with tags: `v0.1.0`, `v0.2.0`, and so on.
-- Create a temporary `release/v0.2.0` branch only when a version needs a short
-  stabilization period. Delete it after release.
+- Open a pull request into `main`; merge only when CI passes and another member
+  has reviewed the change.
+- When a revision on `main` has been tested as a complete system, promote that
+  exact revision to `prod` through a pull request.
+- Tag every promoted production revision: `v0.1.0`, `v0.2.0`, and so on. Tags make
+  the individual working versions permanent and easy to restore.
+- Never develop features directly on `prod`.
 
 Commit examples:
 
@@ -69,6 +129,21 @@ test(orchestrator): verify failed capture recovery
 docs(hardware): add wiring diagram
 ```
 
+The intended flow is:
+
+```text
+type/* -> main -> prod -> version tag
+```
+
+Use `type/short-kebab-description` for development branches. Allowed types are
+`feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `ci`, and `experiment`.
+Examples include `fix/door-sensor` and `feat/camera-capture`.
+
+GitHub Actions runs on every pushed branch and every pull request. CI verifies
+the files, commit-message convention, static types and tests. Unlike local
+hooks, CI does not rewrite files: it reports failures so the author can correct
+and push them.
+
 ## First milestones
 
 1. Simulated door event creates a complete event record.
@@ -77,4 +152,3 @@ docs(hardware): add wiring diagram
 4. A second camera and controlled lighting are added.
 5. Radar is tested independently and then synchronized.
 6. A versioned exported model is integrated for inference.
-
