@@ -6,7 +6,7 @@ data_directory = "data/events"
 wait_after_close_seconds = 0.5
 log_level = "INFO"
 simulated_hardware = false
-camera_count = 2
+camera_count = 1
 
 [door]
 # BCM GPIO number of the door switch. Verify it (and open_level) on the Pi with:
@@ -23,16 +23,10 @@ poll_interval_seconds = 0.05
 [cameras.fridge]
 kind = "rpicam"
 index = 0
-width = 1280
-height = 720
-fps = 30
-
-[cameras.door]
-kind = "rpicam"
-index = 1
-width = 1280
-height = 720
-fps = 30
+width = 2304
+height = 1296
+fps = 50
+rotation = 90
 
 [segmentation]
 # Motion = mean grey-level change between frames (0-255). Calibrate with --analyse-motion.
