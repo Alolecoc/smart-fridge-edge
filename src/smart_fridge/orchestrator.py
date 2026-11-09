@@ -10,14 +10,21 @@ from enum import Enum, auto
 from pathlib import Path
 from uuid import uuid4
 
-from smart_fridge.hardware.interfaces import Camera, DoorSensor, Lighting
+from smart_fridge.hardware.interfaces import DoorSensor, Lighting, VideoRecorder
 
 
 class SystemState(Enum):
     IDLE = auto()
-    DOOR_OPEN = auto()
-    CAPTURING = auto()
+    RECORDING = auto()
+    WAITING_FOR_CLOSE = auto()
     ERROR = auto()
+
+
+@dataclass(frozen=True)
+class Recording:
+    camera: str
+    path: Path
+    started_at: datetime
 
 
 @dataclass(frozen=True)
@@ -25,132 +32,182 @@ class EventResult:
     event_id: str
     event_directory: Path
     metadata_path: Path
+    door_opened_at: datetime
+    door_closed_at: datetime
+    recordings: tuple[Recording, ...]
+    errors: tuple[str, ...] = ()
+
+
+class DebouncedDoor:
+    """Report a new door state only after it has been stable for `seconds`."""
+
+    def __init__(
+        self,
+        door: DoorSensor,
+        seconds: float,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.door = door
+        self.seconds = seconds
+        self.monotonic = monotonic
+        self.state = door.is_open()
+        self.candidate = self.state
+        self.since = monotonic()
+
+    def is_open(self) -> bool:
+        raw = self.door.is_open()
+        current = self.monotonic()
+        if raw != self.candidate:
+            self.candidate, self.since = raw, current
+        if raw != self.state and current - self.since >= self.seconds:
+            self.state = raw
+        return self.state
 
 
 class Orchestrator:
-    """Coordinate one door event without depending on concrete hardware."""
+    """Record every camera while the door is open, without depending on concrete hardware."""
 
     def __init__(
         self,
         door: DoorSensor,
         lighting: Lighting,
-        cameras: Sequence[Camera],
+        recorders: Sequence[VideoRecorder],
         data_directory: Path,
         wait_after_close_seconds: float = 0.0,
+        max_recording_seconds: float = 300.0,
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
-        capture_suffix: str = ".txt",
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.door = door
         self.lighting = lighting
-        self.cameras = cameras
+        self.recorders = recorders
         self.data_directory = data_directory
         self.wait_after_close_seconds = wait_after_close_seconds
+        self.max_recording_seconds = max_recording_seconds
         self.clock = clock or (lambda: datetime.now(UTC))
         self.sleeper = sleeper
-        if capture_suffix not in {".txt", ".jpg", ".png", ".ppm"}:
-            raise ValueError("unsupported camera file suffix")
-        self.capture_suffix = capture_suffix
+        self.monotonic = monotonic
         self.state = SystemState.IDLE
+        self.event_id: str | None = None
+        self.event_directory: Path | None = None
         self.door_opened_at: datetime | None = None
+        self.recording_since = 0.0
+        self.active: list[tuple[VideoRecorder, datetime]] = []
         self.logger = logging.getLogger(__name__)
 
     def poll(self) -> EventResult | None:
         """Advance the state machine once based on the current door state."""
-        if self.state is SystemState.IDLE and self.door.is_open():
-            self.state = SystemState.DOOR_OPEN
-            self.door_opened_at = self.clock()
-            self.logger.info("door opened")
+        door_open = self.door.is_open()
+        if self.state is SystemState.IDLE and door_open:
+            self._start_recording()
             return None
-
-        if self.state is SystemState.DOOR_OPEN and not self.door.is_open():
-            self.logger.info("door closed")
-            return self._capture_closed_state()
-
+        if self.state is SystemState.RECORDING:
+            if not door_open:
+                self.logger.info("door closed", extra={"event_id": self.event_id})
+                if self.wait_after_close_seconds:
+                    self.sleeper(self.wait_after_close_seconds)
+                return self.finish("door closed")
+            if self.monotonic() - self.recording_since >= self.max_recording_seconds:
+                result = self.finish("maximum recording length reached")
+                self.state = SystemState.WAITING_FOR_CLOSE
+                return result
+        if self.state is SystemState.WAITING_FOR_CLOSE and not door_open:
+            self.state = SystemState.IDLE
         return None
 
-    def _capture_closed_state(self) -> EventResult:
-        self.state = SystemState.CAPTURING
-        door_closed_at = self.clock()
-        event_id = f"{door_closed_at:%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
-        event_directory = self.data_directory / event_id
-        metadata_path = event_directory / "metadata.json"
-        outputs: list[str] = []
-        event_directory.mkdir(parents=True, exist_ok=False)
-        self.logger.info("capture started", extra={"event_id": event_id})
+    def reset(self) -> None:
+        """Return to IDLE after an error once the door is closed again."""
+        if self.state is SystemState.ERROR and not self.door.is_open():
+            self.state = SystemState.IDLE
 
+    def _start_recording(self) -> None:
+        self.door_opened_at = self.clock()
+        self.event_id = f"{self.door_opened_at:%Y%m%dT%H%M%SZ}-{uuid4().hex[:8]}"
+        self.event_directory = self.data_directory / self.event_id
+        self.event_directory.mkdir(parents=True, exist_ok=False)
+        self.recording_since = self.monotonic()
+        self.logger.info("door opened; recording", extra={"event_id": self.event_id})
+        self.lighting.turn_on()
         try:
-            if self.wait_after_close_seconds:
-                self.sleeper(self.wait_after_close_seconds)
-            self.lighting.turn_on()
-            for index, camera in enumerate(self.cameras):
-                output_name = f"camera-{index + 1}{self.capture_suffix}"
-                camera.capture(event_directory / output_name)
-                outputs.append(output_name)
-            completed_at = self.clock()
-            self._write_metadata(
-                metadata_path,
-                event_id=event_id,
-                status="captured",
-                door_closed_at=door_closed_at,
-                completed_at=completed_at,
-                outputs=outputs,
-            )
+            for recorder in self.recorders:
+                started_at = self.clock()
+                recorder.start(self.event_directory / f"{recorder.name}.mp4")
+                self.active.append((recorder, started_at))
         except Exception as error:
-            self.state = SystemState.ERROR
-            self._write_metadata(
-                metadata_path,
-                event_id=event_id,
-                status="failed",
-                door_closed_at=door_closed_at,
-                completed_at=self.clock(),
-                outputs=outputs,
-                error=str(error),
-            )
-            self.logger.exception("capture failed", extra={"event_id": event_id})
-            raise
-        finally:
+            for recorder, _ in self.active:
+                try:
+                    recorder.stop()
+                except Exception:
+                    self.logger.exception("could not stop %s", recorder.name)
+            self.active = []
             self.lighting.turn_off()
+            self.state = SystemState.ERROR
+            self._write_metadata(self.clock(), [], [str(error)], "failed")
+            self.logger.exception("recording failed to start", extra={"event_id": self.event_id})
+            raise
+        self.state = SystemState.RECORDING
 
-        self.state = SystemState.IDLE
-        self.door_opened_at = None
-        self.logger.info("capture completed", extra={"event_id": event_id})
-        return EventResult(
-            event_id=event_id,
-            event_directory=event_directory,
+    def finish(self, reason: str) -> EventResult:
+        """Stop every camera; a camera that fails does not discard the others."""
+        assert self.event_id is not None and self.event_directory is not None
+        assert self.door_opened_at is not None
+        recordings: list[Recording] = []
+        errors: list[str] = []
+        for recorder, started_at in self.active:
+            try:
+                recordings.append(Recording(recorder.name, recorder.stop(), started_at))
+            except Exception as error:
+                errors.append(f"{recorder.name}: {error}")
+                self.logger.exception("camera %s failed", recorder.name)
+        self.active = []
+        self.lighting.turn_off()
+        closed_at = self.clock()
+        status = "recorded" if recordings and not errors else "partial" if recordings else "failed"
+        metadata_path = self._write_metadata(closed_at, recordings, errors, status, reason)
+        self.logger.info("recording stopped (%s)", reason, extra={"event_id": self.event_id})
+        result = EventResult(
+            event_id=self.event_id,
+            event_directory=self.event_directory,
             metadata_path=metadata_path,
+            door_opened_at=self.door_opened_at,
+            door_closed_at=closed_at,
+            recordings=tuple(recordings),
+            errors=tuple(errors),
         )
+        self.state = SystemState.IDLE
+        return result
 
     def _write_metadata(
         self,
-        path: Path,
-        *,
-        event_id: str,
+        closed_at: datetime,
+        recordings: list[Recording],
+        errors: list[str],
         status: str,
-        door_closed_at: datetime,
-        completed_at: datetime,
-        outputs: list[str],
-        error: str | None = None,
-    ) -> None:
+        reason: str = "",
+    ) -> Path:
+        assert self.event_directory is not None and self.door_opened_at is not None
         document: dict[str, object] = {
-            "event_id": event_id,
-            "door_opened_at": self._isoformat(self.door_opened_at),
-            "door_closed_at": self._isoformat(door_closed_at),
-            "completed_at": self._isoformat(completed_at),
+            "event_id": self.event_id,
+            "door_opened_at": self.door_opened_at.isoformat(),
+            "door_closed_at": closed_at.isoformat(),
+            "stop_reason": reason,
             "status": status,
-            "sensors": [f"camera-{index + 1}" for index in range(len(self.cameras))],
-            "outputs": outputs,
+            "cameras": [recorder.name for recorder in self.recorders],
+            "recordings": [
+                {
+                    "camera": item.camera,
+                    "file": item.path.name,
+                    "started_at": item.started_at.isoformat(),
+                }
+                for item in recordings
+            ],
+            "errors": errors,
         }
-        if error is not None:
-            document["error"] = error
-
+        path = self.event_directory / "metadata.json"
         temporary_path = path.with_suffix(".json.tmp")
         temporary_path.write_text(
-            json.dumps(document, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+            json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         temporary_path.replace(path)
-
-    @staticmethod
-    def _isoformat(value: datetime | None) -> str | None:
-        return value.isoformat() if value is not None else None
+        return path

@@ -1,0 +1,122 @@
+#!/bin/sh
+set -eu
+
+edge=/srv/smart-fridge/smart-fridge-edge
+
+usage() {
+    cat <<'EOF'
+Smart Fridge controls
+
+Usage: smartfridge <command>
+
+Live fridge
+  start                         Start GPIO17 door monitoring and recording
+  stop                          Stop recording and processing cleanly
+  restart                       Restart the live fridge service
+  status                        Show current mode and service health
+  logs                          Follow door, camera, and inference logs
+  clear live|acq|test           Clear saved videos and database records for a mode
+
+Operating mode
+  mode                           Show the current mode
+  mode test                      Keep recordings; publish clips for review
+  mode production                Normal use with automatic file retention
+  mode acquisition               Keep all recordings and training data
+
+Hardware checks
+  check door [seconds]           Watch GPIO17 open/closed changes (default 60)
+  check cameras                  Record and verify both cameras
+
+Review tool
+  review                         Explain the tool, show URLs and status
+  review start|stop|restart      Control the review web server
+  review logs                    Follow review-server logs
+
+Help
+  help                           Show this guide
+EOF
+}
+
+case "${1:-}" in
+    help|-h|--help) usage ;;
+    start|stop|restart) exec sudo -n /usr/bin/systemctl "$1" smart-fridge.service ;;
+    status)
+        echo "mode: $(cat /etc/smart-fridge/mode)"
+        exec /usr/bin/systemctl --no-pager --full status smart-fridge.service
+        ;;
+    logs) exec /usr/bin/journalctl -u smart-fridge.service -f ;;
+    clear)
+        [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+        if /usr/bin/systemctl is-active --quiet smart-fridge.service; then
+            echo "stop the live fridge before clearing saved data" >&2
+            exit 1
+        fi
+        case "$2" in
+            live) mode=production ;;
+            acq) mode=acquisition ;;
+            test) mode=test ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        if /usr/bin/systemctl is-active --quiet smart-fridge.service && \
+            [ "$(cat /etc/smart-fridge/mode)" = "$mode" ]; then
+            echo "smart-fridge.service is using this mode; run 'smartfridge stop' first" >&2
+            exit 1
+        fi
+        exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --clear "$mode"
+        ;;
+    mode)
+        if [ "$#" -eq 1 ]; then
+            cat /etc/smart-fridge/mode
+        elif [ "$#" -eq 2 ]; then
+            exec sudo -n /usr/local/sbin/smart-fridge-set-mode "$2"
+        else
+            usage >&2
+            exit 2
+        fi
+        ;;
+    check)
+        case "${2:-}" in
+            door)
+                [ "$#" -le 3 ] || { usage >&2; exit 2; }
+                exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --check-door --seconds "${3:-60}"
+                ;;
+            camera|cameras)
+                [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+                exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --check-cameras
+                ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    door-check)
+        [ "$#" -le 2 ] || { usage >&2; exit 2; }
+        exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --check-door --seconds "${2:-60}"
+        ;;
+    camera-check)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --check-cameras
+        ;;
+    review)
+        case "${2:-status}" in
+            start|stop|restart)
+                [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+                exec sudo -n /usr/bin/systemctl "$2" fridge-review.service
+                ;;
+            logs)
+                [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+                exec /usr/bin/journalctl -u fridge-review.service -f
+                ;;
+            status)
+                [ "$#" -le 2 ] || { usage >&2; exit 2; }
+                echo "The review tool shows processed clips, tracks, IN/OUT decisions,"
+                echo "and lets you correct labels and draw camera zones."
+                echo
+                echo "LAN:       http://smartfridge.local:9000"
+                echo "Tailscale: http://$(tailscale ip -4 2>/dev/null):9000"
+                echo
+                exec /usr/bin/systemctl --no-pager --full status fridge-review.service
+                ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    *) usage >&2; exit 2 ;;
+esac

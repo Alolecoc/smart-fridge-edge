@@ -23,13 +23,18 @@ A state machine represents the system as a small number of explicit states.
 Only defined transitions are allowed:
 
 ```text
-IDLE --door opens--> DOOR_OPEN --door closes--> CAPTURING --> IDLE
-                                                |
-                                                +----------> ERROR
+IDLE --door opens--> RECORDING --door closes--> IDLE   (event handed to segmentation)
+                         |
+                         +--max_recording_seconds--> WAITING_FOR_CLOSE --door closes--> IDLE
+IDLE --camera fails to start--> ERROR --door closed--> IDLE
 ```
 
-This prevents accidental duplicate recordings and makes error handling and
-testing clearer than a collection of unrelated callbacks.
+Every camera records while the door is open. After the door closes, a background
+thread finds the moments with motion, cuts them into segments and queues each segment
+for ML; another thread runs ML on the queue. The door loop therefore never waits for
+inference and can start the next event immediately. This prevents accidental
+duplicate recordings and makes error handling and testing clearer than a collection
+of unrelated callbacks.
 
 ## Branching and releases
 
