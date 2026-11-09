@@ -80,8 +80,8 @@ def test_repository_configs_are_valid() -> None:
         load_config(root / name)
     pi = load_config(root / "pi.toml")
     assert pi.door.gpio_pin == 17  # The door switch on the fridge.
-    assert [camera.name for camera in pi.cameras] == ["fridge", "door"]
-    assert pi.cameras[0].rotation == 0
+    assert [camera.name for camera in pi.cameras] == ["fridge"]
+    assert pi.cameras[0].rotation == 90
 
 
 @pytest.mark.parametrize(
