@@ -51,8 +51,9 @@ class CameraConfig:
 
 @dataclass(frozen=True)
 class SegmentationConfig:
-    """How a door-event recording is cut into clips where something moved."""
+    """How a door-event recording is prepared for ML."""
 
+    process_whole_recording: bool = True
     analysis_fps: float = 10.0
     motion_threshold: float = 3.0
     padding_seconds: float = 1.0
