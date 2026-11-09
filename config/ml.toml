@@ -3,14 +3,14 @@ data_directory = "data/events"
 wait_after_close_seconds = 0.0
 log_level = "INFO"
 simulated_hardware = true
-camera_count = 1
+camera_count = 2
 
 [ml]
 enabled = true
 # Paths are relative to this repository, not the terminal working directory.
 repository = "../grocery-product-detection"
 python = "../grocery-product-detection/.venv/bin/python"
-model_config = "../grocery-product-detection/configs/inference.yaml"
+model_config = "../grocery-product-detection/configs/video.yaml"
 models_directory = "../grocery-product-detection/models"
 database_directory = "database"
 mode = "production"
