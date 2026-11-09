@@ -1,4 +1,4 @@
-"""After the door closes: find motion, cut segments and queue them for ML."""
+"""After the door closes: queue full recordings or motion segments for ML."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class EventProcessor:
         self.logger = logging.getLogger(__name__)
 
     def process(self, event: EventResult, keep_sources: bool = False) -> list[str]:
-        """Queue every moving segment of every camera; returns the capture IDs."""
+        """Queue every camera recording; returns the capture IDs."""
         metadata: dict[str, Any] = json.loads(event.metadata_path.read_text(encoding="utf-8"))
         metadata["mode"] = self.mode
         self.database.record_event(event.event_id, metadata)
@@ -56,7 +56,7 @@ class EventProcessor:
                 )
         # Only staging remains here: kept footage was moved to the archive above.
         shutil.rmtree(event.event_directory, ignore_errors=True)
-        self.logger.info("queued %d segments", len(captures), extra={"event_id": event.event_id})
+        self.logger.info("queued %d videos", len(captures), extra={"event_id": event.event_id})
         return captures
 
     def _queue_recording(
@@ -64,9 +64,39 @@ class EventProcessor:
     ) -> list[str]:
         config = self.segmentation
         duration = video_duration(path)
+        start_offset = max(0.0, (recording.started_at - event.door_opened_at).total_seconds())
+        if config.process_whole_recording:
+            segment = {
+                "index": 0,
+                "start": 0.0,
+                "end": round(duration, 3),
+                "recording": path.name,
+                "whole_recording": True,
+            }
+            capture_id = self.database.enqueue_video(
+                event_id=event.event_id,
+                video=path,
+                camera=recording.camera,
+                mode=self.mode,
+                captured_at=recording.started_at.isoformat(),
+                offset_seconds=start_offset,
+                segment=segment,
+                move=not (keep or keep_sources),
+            )
+            self.database.add_recording(
+                event_id=event.event_id,
+                camera=recording.camera,
+                started_at=recording.started_at.isoformat(),
+                path=path if keep or keep_sources else None,
+                kept=keep or keep_sources,
+                status="queued_whole",
+                duration_seconds=round(duration, 3),
+                segments=[{"capture_id": capture_id, **segment}],
+            )
+            return [capture_id]
+
         samples = motion_samples(path, config.analysis_fps)
         segments = find_segments(samples, duration, config)
-        start_offset = max(0.0, (recording.started_at - event.door_opened_at).total_seconds())
         work = event.event_directory / f"{recording.camera}-segments"
         captures = []
         rows = []

@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -78,7 +79,9 @@ def make_clip(path: Path) -> Path:
 
 
 @needs_ffmpeg
-def test_recording_is_cut_queued_and_logged(tmp_path: Path) -> None:
+def test_whole_recording_is_queued_without_motion_cutting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     database = Database(tmp_path / "database")
     staging = tmp_path / "staging" / "event-1"
     staging.mkdir(parents=True)
@@ -94,6 +97,12 @@ def test_recording_is_cut_queued_and_logged(tmp_path: Path) -> None:
         door_closed_at=opened,
         recordings=(Recording("fridge", clip, opened),),
     )
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError("motion segmentation must not run for a whole recording")
+
+    monkeypatch.setattr("smart_fridge.events.motion_samples", unexpected)
+    monkeypatch.setattr("smart_fridge.events.cut_segment", unexpected)
     captures = EventProcessor(database, SETTINGS, "test").process(event)
 
     assert len(captures) == 1
@@ -104,14 +113,15 @@ def test_recording_is_cut_queued_and_logged(tmp_path: Path) -> None:
     payload = capture["input_json"]
     assert '"camera": "fridge"' in payload and '"schema_version": 2' in payload
     assert capture["mode"] == "test"
-    assert recording["status"] == "segmented" and recording["kept"] == 1
+    assert recording["status"] == "queued_whole" and recording["kept"] == 1
     assert Path(recording["path"]).is_file()  # Test mode keeps the full recording.
     start = float(payload.split('"offset_seconds": ')[1].split(",")[0])
-    assert 0.5 <= start <= 2.0
+    assert start == 0.0
+    assert '"whole_recording": true' in payload
 
 
 @needs_ffmpeg
-def test_production_deletes_the_full_recording_after_cutting(tmp_path: Path) -> None:
+def test_production_moves_the_full_recording_to_the_capture(tmp_path: Path) -> None:
     database = Database(tmp_path / "database")
     staging = tmp_path / "staging" / "event-2"
     staging.mkdir(parents=True)
@@ -126,3 +136,25 @@ def test_production_deletes_the_full_recording_after_cutting(tmp_path: Path) -> 
     assert not (database.root / "recordings").exists()
     with database.connect() as connection:
         assert connection.execute("SELECT kept FROM recordings").fetchone()[0] == 0
+
+
+@needs_ffmpeg
+def test_motion_segmentation_remains_available(tmp_path: Path) -> None:
+    database = Database(tmp_path / "database")
+    staging = tmp_path / "staging" / "event-3"
+    staging.mkdir(parents=True)
+    clip = make_clip(staging / "fridge.mp4")
+    metadata = staging / "metadata.json"
+    metadata.write_text("{}")
+    opened = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+    event = EventResult(
+        "event-3", staging, metadata, opened, opened, (Recording("fridge", clip, opened),)
+    )
+
+    settings = replace(SETTINGS, process_whole_recording=False)
+    assert len(EventProcessor(database, settings, "test").process(event)) == 1
+    with database.connect() as connection:
+        recording = connection.execute("SELECT * FROM recordings").fetchone()
+        capture = connection.execute("SELECT * FROM captures").fetchone()
+    assert recording["status"] == "segmented"
+    assert float(capture["input_json"].split('"offset_seconds": ')[1].split(",")[0]) > 0.0

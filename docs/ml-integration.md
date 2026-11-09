@@ -2,7 +2,7 @@
 
 The edge application owns the door, the cameras, SQLite and every stored file. The ML
 repository (`grocery-product-detection`) is a subprocess in this chain: it receives one
-JSON request per video segment and returns JSON. It never opens the edge database.
+JSON request per camera recording and returns JSON. It never opens the edge database.
 There are no PyTorch dependencies here.
 
 For the full Raspberry Pi setup, see `../grocery-product-detection/HOW-TO.md`.
@@ -13,10 +13,10 @@ For the full Raspberry Pi setup, see `../grocery-product-detection/HOW-TO.md`.
    (`rpicam-vid` for Pi camera modules, `ffmpeg` for USB cameras).
 2. **Door closes**: recording continues for `wait_after_close_seconds`, then stops.
    A door left open longer than `max_recording_seconds` is cut there.
-3. **Segmentation** (background thread): ffmpeg measures frame-to-frame change. Moments
-   above `motion_threshold` are padded, merged and cut into segments. With no motion at
-   all, the whole recording is queued (`whole_clip_without_motion`).
-4. **Queue**: each segment becomes a `captures` row with a schema 2 request
+3. **Video preparation** (background thread): the complete recording is queued when
+   `process_whole_recording = true`. Optional motion segmentation can instead use ffmpeg
+   to find, pad, merge and cut moments with movement.
+4. **Queue**: each recording becomes a `captures` row with a schema 2 request
    (`camera`, `video_path`, `offset_seconds` from the door opening).
 5. **ML** (background thread): `main.py` tracks objects, decides in/out with the zones
    drawn in the review tool and classifies them. The result is validated and stored.
@@ -29,8 +29,8 @@ python run.py --config config/pi.toml --run --data-aquisition
 
 | Mode | ML flag | Full recordings | Segment files | Review tool |
 | --- | --- | --- | --- | --- |
-| `production` | `--production` | deleted after cutting | newest `retention_runs` kept | no |
-| `test` | `--test` | kept in `database/recordings/` | newest `retention_runs` kept | every clip + prediction |
+| `production` | `--production` | moved into the capture | newest `retention_runs` kept | no |
+| `test` | `--test` | kept in `database/recordings/` | newest `retention_runs` kept | every recording + prediction |
 | `acquisition` | `--data-aquisition` | kept | kept, plus `acquisition_records` | no |
 
 ## Commands
@@ -67,7 +67,7 @@ SELECT camera, direction, category, confidence, start_seconds
 FROM movements WHERE event_id = ? ORDER BY start_seconds;
 ```
 
-Files: `database/captures/<capture-id>/clip.mp4` (segments),
+Files: `database/captures/<capture-id>/clip.mp4` (complete recording by default),
 `database/runs/<run-id>/` (request, result, log, ML working copy and crops),
 `database/recordings/<event-id>/` (full recordings in test/acquisition mode).
 The database version is stored in `PRAGMA user_version`; older databases from the
@@ -89,7 +89,7 @@ timed-out process records an error without discarding the segment.
 ## Retention
 
 `retention_runs = 3` keeps the files of the newest three successful production/test
-**segments** across all cameras and events. Older segment and run folders are deleted;
+**recordings** across all cameras and events. Older capture and run folders are deleted;
 their movements, categories and result JSON stay in SQLite and are marked `purged_at`.
 Acquisition, pending and failed captures are never purged. Cleanup runs at startup,
 after each ML run and every `purge_interval_seconds`. Jobs still marked running after
