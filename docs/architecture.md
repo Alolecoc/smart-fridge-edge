@@ -30,8 +30,9 @@ IDLE --camera fails to start--> ERROR --door closed--> IDLE
 ```
 
 Every camera records while the door is open. After the door closes, a background
-thread finds the moments with motion, cuts them into segments and queues each segment
-for ML; another thread runs ML on the queue. The door loop therefore never waits for
+thread queues each complete camera recording for ML; another thread runs ML on the
+queue. Optional motion segmentation can be enabled in configuration when shorter clips
+are preferred. The door loop therefore never waits for
 inference and can start the next event immediately. This prevents accidental
 duplicate recordings and makes error handling and testing clearer than a collection
 of unrelated callbacks.
