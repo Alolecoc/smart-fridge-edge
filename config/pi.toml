@@ -29,7 +29,9 @@ fps = 50
 rotation = 90
 
 [segmentation]
-# Motion = mean grey-level change between frames (0-255). Calibrate with --analyse-motion.
+# Queue the complete door recording for ML. Set false to enable motion-based cutting.
+process_whole_recording = true
+# Motion settings below are used only when process_whole_recording is false.
 analysis_fps = 10.0
 motion_threshold = 3.0
 padding_seconds = 1.0
