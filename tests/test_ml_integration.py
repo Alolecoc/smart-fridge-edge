@@ -14,6 +14,16 @@ from smart_fridge.inference import InferenceWorker
 from smart_fridge.service import MLService
 
 
+def symlink_or_skip(link: Path, target: Path | str, *, directory: bool = False) -> None:
+    """Create a symlink, or skip when Windows has not granted symlink privileges."""
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is not enabled")
+        raise
+
+
 def enqueue(database: Database, tmp_path: Path, mode: str = "production") -> str:
     clip = tmp_path / "source.mp4"
     clip.write_bytes(b"video")
@@ -293,7 +303,7 @@ def test_purge_refuses_symlinked_managed_directory(tmp_path: Path) -> None:
     external = tmp_path / "do-not-delete"
     external.mkdir()
     (external / "important").write_text("keep")
-    directory.symlink_to(external, target_is_directory=True)
+    symlink_or_skip(directory, external, directory=True)
     with pytest.raises(ValueError, match="outside managed"):
         database.purge(1)
     assert (external / "important").read_text() == "keep"
@@ -307,7 +317,7 @@ def test_ml_config_paths_and_validation(tmp_path: Path) -> None:
         load_config(path)
     path.write_text('[system]\n[ml]\nrepository="ml"\nmode="test"\npython="venv/bin/python"\n')
     (tmp_path / "venv/bin").mkdir(parents=True)
-    (tmp_path / "venv/bin/python").symlink_to(sys.executable)
+    symlink_or_skip(tmp_path / "venv/bin/python", sys.executable)
     config = load_config(path)
     assert config.ml.repository == tmp_path / "ml"
     assert config.ml.python == tmp_path / "venv/bin/python"  # The venv link is kept.
