@@ -64,6 +64,43 @@ def test_records_every_camera_while_the_door_is_open(tmp_path: Path) -> None:
     assert system.state is SystemState.IDLE
 
 
+def test_close_time_is_sensor_time_not_postprocessing_time(tmp_path: Path) -> None:
+    times = iter(
+        [
+            datetime(2026, 11, 16, 10, 0, 0, tzinfo=UTC),
+            datetime(2026, 11, 16, 10, 0, 1, tzinfo=UTC),
+            datetime(2026, 11, 16, 10, 0, 2, tzinfo=UTC),
+            datetime(2026, 11, 16, 10, 5, 0, tzinfo=UTC),
+        ]
+    )
+    door = SimulatedDoorSensor(open=True)
+    system = Orchestrator(
+        door,
+        SimulatedLighting(),
+        [SimulatedRecorder()],
+        tmp_path,
+        clock=lambda: next(times),
+    )
+    system.poll()
+    door.open = False
+    result = system.poll()
+    assert result is not None
+    assert result.door_closed_at == datetime(2026, 11, 16, 10, 0, 2, tzinfo=UTC)
+
+
+def test_recording_carries_rotation_to_background_processor(tmp_path: Path) -> None:
+    door = SimulatedDoorSensor(open=True)
+    recorder = SimulatedRecorder(rotation=90)
+    system = Orchestrator(door, SimulatedLighting(), [recorder], tmp_path)
+    system.poll()
+    door.open = False
+    result = system.poll()
+    assert result is not None
+    assert result.recordings[0].rotation == 90
+    metadata = json.loads(result.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["recordings"][0]["rotation"] == 90
+
+
 def test_idle_poll_does_nothing(tmp_path: Path) -> None:
     system = Orchestrator(
         SimulatedDoorSensor(), SimulatedLighting(), [SimulatedRecorder()], tmp_path

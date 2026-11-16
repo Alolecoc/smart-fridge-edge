@@ -26,13 +26,17 @@ class InferenceWorker:
         job = self.database.claim(capture_id)
         if job is None:
             return False
+        logger = logging.getLogger(__name__)
+        logger.info("capture %s state PENDING -> RUNNING", job["capture_id"])
         try:
             result = self._invoke(job)
             self.database.complete(job, result)
+            logger.info("capture %s state RUNNING -> COMPLETED", job["capture_id"])
             for warning in result.get("warnings", []):
                 logging.getLogger(__name__).warning("%s: %s", job["capture_id"], warning)
         except Exception as error:
             self.database.fail(job, str(error))
+            logger.error("capture %s state RUNNING -> FAILED", job["capture_id"])
             # Keep the daemon alive so another capture can still be processed.
             logging.getLogger(__name__).exception("inference failed for %s", job["capture_id"])
         return True

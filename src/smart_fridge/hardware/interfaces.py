@@ -21,6 +21,7 @@ class VideoRecorder(Protocol):
     """One camera that records while the door is open."""
 
     name: str
+    rotation: int
 
     def start(self, destination: Path) -> None:
         """Begin recording to destination; return once recording has started."""

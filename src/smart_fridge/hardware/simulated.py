@@ -32,6 +32,7 @@ class SimulatedRecorder:
     sample: Path | None = None
     recording: Path | None = None
     recordings: int = 0
+    rotation: int = 0
 
     def start(self, destination: Path) -> None:
         if self.recording is not None:

@@ -2,8 +2,8 @@
 # Start with: python run.py --config config/pi.toml --run   (add --test to monitor)
 [system]
 data_directory = "data/events"
-# Keep recording this long after the door closes, to see items placed at the last moment.
-wait_after_close_seconds = 0.5
+# Stop as soon as the debounced reed switch reports that the door is closed.
+wait_after_close_seconds = 0.0
 log_level = "INFO"
 simulated_hardware = false
 camera_count = 1
@@ -14,8 +14,10 @@ camera_count = 1
 gpio_pin = 17
 open_level = "high"  # Raw level when the door is OPEN (a reed switch to GND with pull-up: high).
 pull_up = true
-debounce_seconds = 0.1
-poll_interval_seconds = 0.05
+# A change must be stable for 50 ms. The loop checks every 10 ms, so a genuine
+# change is normally acted on in about 50-60 ms while contact bounce is ignored.
+debounce_seconds = 0.05
+poll_interval_seconds = 0.01
 
 # Names must match the cameras in the ML repo's configs/video.yaml (fridge, door).
 # kind = "rpicam": Pi camera module on CSI port `index` (see: rpicam-hello --list-cameras)
@@ -27,6 +29,10 @@ width = 2304
 height = 1296
 fps = 50
 rotation = 90
+# Confirm that rpicam remains alive this long after launch. Allow this long for
+# SIGINT to finalize its MP4 before the process is force-killed.
+start_check_seconds = 0.5
+stop_timeout_seconds = 10.0
 
 [segmentation]
 # Queue the complete door recording for ML. Set false to enable motion-based cutting.
@@ -39,6 +45,8 @@ merge_gap_seconds = 1.5
 min_segment_seconds = 0.5
 whole_clip_without_motion = true
 max_recording_seconds = 300.0
+# Rotation/transcoding happens in the background and never blocks the door sensor.
+postprocess_timeout_seconds = 600.0
 
 [ml]
 enabled = true

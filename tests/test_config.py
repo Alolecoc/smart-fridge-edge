@@ -56,12 +56,15 @@ open_level = "LOW"
 [cameras.fridge]
 index = 0
 rotation = 90
+start_check_seconds = 0.75
+stop_timeout_seconds = 4.0
 [cameras.door]
 kind = "v4l2"
 device = "/dev/video2"
 [segmentation]
 motion_threshold = 2.5
 whole_clip_without_motion = false
+postprocess_timeout_seconds = 123.0
 """.strip(),
         encoding="utf-8",
     )
@@ -69,9 +72,12 @@ whole_clip_without_motion = false
     assert config.door.gpio_pin == 17 and config.door.open_level == "low"
     assert [camera.name for camera in config.cameras] == ["fridge", "door"]
     assert config.cameras[0].rotation == 90
+    assert config.cameras[0].start_check_seconds == 0.75
+    assert config.cameras[0].stop_timeout_seconds == 4.0
     assert config.cameras[1].kind == "v4l2" and config.cameras[1].device == "/dev/video2"
     assert config.segmentation.motion_threshold == 2.5
     assert config.segmentation.whole_clip_without_motion is False
+    assert config.segmentation.postprocess_timeout_seconds == 123.0
 
 
 def test_repository_configs_are_valid() -> None:

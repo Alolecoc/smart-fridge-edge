@@ -1,10 +1,11 @@
 import argparse
+import json
 import logging
 import queue
 import signal
 import threading
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -57,6 +58,15 @@ def main() -> None:
     action.add_argument(
         "--analyse-motion", type=Path, help="Print motion levels and segments of a clip."
     )
+    action.add_argument(
+        "--event-status", nargs="?", const="latest", help="Show latest or specified capture state."
+    )
+    action.add_argument(
+        "--retry", nargs="?", const="latest", help="Retry latest or specified failed capture."
+    )
+    action.add_argument(
+        "--show-config", action="store_true", help="Print validated effective config."
+    )
     parser.add_argument("--event-id", help="Door event for --submit.")
     parser.add_argument("--camera", help="Camera name for --submit (fridge or door).")
     parser.add_argument("--pin", type=int, help="BCM GPIO pin for --check-door.")
@@ -80,6 +90,10 @@ def main() -> None:
         config = replace(config, ml=replace(config.ml, mode=selected))
     configure_logging(config.log_level)
 
+    if arguments.show_config:
+        print(json.dumps(asdict(config), indent=2, default=str))
+        return
+
     if arguments.check_door:
         check_door(config, arguments.pin, arguments.seconds)
         return
@@ -91,6 +105,21 @@ def main() -> None:
         return
 
     service = MLService(config.ml)
+    if arguments.event_status:
+        capture_id = None if arguments.event_status == "latest" else arguments.event_status
+        status = service.database.capture_status(capture_id)
+        if status is None:
+            raise SystemExit("no matching capture")
+        print(json.dumps(status, indent=2, default=str))
+        return
+    if arguments.retry:
+        capture_id = None if arguments.retry == "latest" else arguments.retry
+        try:
+            queued = service.database.retry(capture_id)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        print(f"capture {queued} state FAILED -> PENDING")
+        return
     if arguments.clear:
         captures, recordings = service.database.clear(arguments.clear)
         print(f"cleared {captures} captures and {recordings} recordings")

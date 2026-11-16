@@ -47,6 +47,8 @@ class CameraConfig:
     height: int = 720
     fps: int = 30
     rotation: int = 0
+    start_check_seconds: float = 0.5
+    stop_timeout_seconds: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,7 @@ class SegmentationConfig:
     min_segment_seconds: float = 0.5
     whole_clip_without_motion: bool = True
     max_recording_seconds: float = 300.0
+    postprocess_timeout_seconds: float = 600.0
 
 
 DEFAULT_CAMERAS: tuple[CameraConfig, ...] = (
@@ -148,6 +151,8 @@ def load_config(path: Path) -> AppConfig:
                 height=int(_table(cameras, name).get("height", 720)),
                 fps=int(_table(cameras, name).get("fps", 30)),
                 rotation=int(_table(cameras, name).get("rotation", 0)),
+                start_check_seconds=float(_table(cameras, name).get("start_check_seconds", 0.5)),
+                stop_timeout_seconds=float(_table(cameras, name).get("stop_timeout_seconds", 10.0)),
             )
             for name in cameras
         )
@@ -207,6 +212,8 @@ def _validate(config: AppConfig) -> None:
             raise ValueError("camera width, height and fps must be positive")
         if camera.rotation not in {0, 90, 180, 270}:
             raise ValueError("camera rotation must be 0, 90, 180 or 270")
+        if camera.start_check_seconds <= 0 or camera.stop_timeout_seconds <= 0:
+            raise ValueError("camera timing values must be positive")
     segments = config.segmentation
     numbers = [value for value in vars(segments).values() if not isinstance(value, bool)]
     if any(not math.isfinite(value) or value < 0 for value in numbers):

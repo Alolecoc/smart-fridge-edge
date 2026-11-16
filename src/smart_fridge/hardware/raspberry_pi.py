@@ -46,6 +46,7 @@ class ProcessRecorder:
 
     def __init__(self, config: CameraConfig) -> None:
         self.name = config.name
+        self.rotation = config.rotation
         self.config = config
         self.process: subprocess.Popen[bytes] | None = None
         self.destination: Path | None = None
@@ -119,7 +120,7 @@ class ProcessRecorder:
             self.command(capture_destination), stdout=self.log, stderr=subprocess.STDOUT
         )
         # Fail now, not at door close, if the camera is missing or busy.
-        deadline = time.monotonic() + 0.5
+        deadline = time.monotonic() + self.config.start_check_seconds
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
                 self._close_log()
@@ -136,7 +137,7 @@ class ProcessRecorder:
             # SIGINT lets rpicam-vid and ffmpeg finish the MP4 file properly.
             os.kill(process.pid, signal.SIGINT)
             try:
-                process.wait(timeout=10)
+                process.wait(timeout=self.config.stop_timeout_seconds)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
@@ -150,39 +151,11 @@ class ProcessRecorder:
             raise RuntimeError(
                 f"{self.name} produced no video; see {destination.with_suffix('.log')}"
             )
-        if self.config.rotation in {90, 270}:
-            transpose = "clock" if self.config.rotation == 90 else "cclock"
-            executable = shutil.which("ffmpeg")
-            if executable is None:
-                raise RuntimeError("ffmpeg is missing")
-            subprocess.run(
-                [
-                    executable,
-                    "-nostdin",
-                    "-v",
-                    "error",
-                    "-y",
-                    "-i",
-                    str(source),
-                    "-an",
-                    "-vf",
-                    f"transpose={transpose}",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-crf",
-                    "20",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-movflags",
-                    "+faststart",
-                    str(destination),
-                ],
-                check=True,
-                timeout=600,
-            )
-            source.unlink()
+        # Quarter-turn rotation requires a full FFmpeg transcode. Do not do that in
+        # the door loop: publish the finalized capture immediately and let the
+        # background event processor rotate it before ML runs.
+        if source != destination:
+            source.replace(destination)
         return destination
 
     def _close_log(self) -> None:

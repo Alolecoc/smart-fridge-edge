@@ -4,9 +4,9 @@ Software running on the Raspberry Pi in the smart-fridge prototype. It handles
 door events, coordinates sensors, stores synchronized measurements, and later
 calls a separately trained machine-learning model for inference.
 
-On the real fridge, the door switch starts video recording on both cameras (fridge
-opening and door). When the door closes, the recordings are cut into the moments
-where something moved, and each segment is queued for the ML repository. The ML
+On the real fridge, the door switch starts every configured camera. A stable close
+signal stops all cameras concurrently. Slow rotation and optional segmentation then
+run on a background thread before the video is queued for the ML repository. The ML
 repository decides what went in or out. Everything is stored in SQLite.
 
 ```bash
@@ -27,6 +27,10 @@ The Pi setup installs `scripts/smartfridge` as the `smartfridge` command. Run
 service, `smartfridge clear live|acq|test` deletes the selected mode's managed
 recordings and database records while preserving the other modes.
 
+Useful runtime diagnostics are `smartfridge logs`, `smartfridge event [capture-id]`,
+and `smartfridge config`. A failed ML job whose managed video still exists can be put
+back in the queue with `smartfridge retry [capture-id]` (the latest is the default).
+
 Model training and large datasets belong in the separate `grocery-product-detection`
 repository. This repository only consumes its exported models through `main.py`.
 
@@ -35,7 +39,7 @@ repository. This repository only consumes its exported models through `main.py`.
 ```text
 Door switch (GPIO) -> Orchestrator -> rpicam-vid per camera (while open)
                           |
-                          +-> segmentation thread -> SQLite queue -> ML subprocess
+                          +-> post-processing thread -> SQLite queue -> ML subprocess
                                                                   -> predictions + movements
 ```
 

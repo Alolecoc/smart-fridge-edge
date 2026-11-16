@@ -15,6 +15,9 @@ Live fridge
   restart                       Restart the live fridge service
   status                        Show current mode and service health
   logs                          Follow door, camera, and inference logs
+  event [capture-id]            Show latest or specified processing state
+  retry [capture-id]            Retry latest or specified failed ML capture
+  config                        Show the validated effective configuration
   clear live|acq|test           Clear saved videos and database records for a mode
 
 Operating mode
@@ -45,6 +48,18 @@ case "${1:-}" in
         exec /usr/bin/systemctl --no-pager --full status smart-fridge.service
         ;;
     logs) exec /usr/bin/journalctl -u smart-fridge.service -f ;;
+    event)
+        [ "$#" -le 2 ] || { usage >&2; exit 2; }
+        exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --event-status "${2:-latest}"
+        ;;
+    retry)
+        [ "$#" -le 2 ] || { usage >&2; exit 2; }
+        exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --retry "${2:-latest}"
+        ;;
+    config)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --show-config
+        ;;
     clear)
         [ "$#" -eq 2 ] || { usage >&2; exit 2; }
         if /usr/bin/systemctl is-active --quiet smart-fridge.service; then
