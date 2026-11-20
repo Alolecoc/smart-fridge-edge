@@ -4,3 +4,11 @@ wait_after_close_seconds = 0.0
 log_level = "INFO"
 simulated_hardware = true
 camera_count = 1
+
+[thermal]
+enabled = false
+port = "auto"
+baudrate = 460800
+start_timeout_seconds = 2.0
+stop_timeout_seconds = 5.0
+max_capture_seconds = 300.0

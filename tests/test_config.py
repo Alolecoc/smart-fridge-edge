@@ -56,12 +56,22 @@ open_level = "LOW"
 [cameras.fridge]
 index = 0
 rotation = 90
+start_check_seconds = 0.75
+stop_timeout_seconds = 4.0
 [cameras.door]
 kind = "v4l2"
 device = "/dev/video2"
 [segmentation]
 motion_threshold = 2.5
 whole_clip_without_motion = false
+postprocess_timeout_seconds = 123.0
+[thermal]
+enabled = true
+port = "/dev/serial/by-id/thermal-node"
+baudrate = 460800
+start_timeout_seconds = 1.5
+stop_timeout_seconds = 4.0
+max_capture_seconds = 240.0
 """.strip(),
         encoding="utf-8",
     )
@@ -69,9 +79,16 @@ whole_clip_without_motion = false
     assert config.door.gpio_pin == 17 and config.door.open_level == "low"
     assert [camera.name for camera in config.cameras] == ["fridge", "door"]
     assert config.cameras[0].rotation == 90
+    assert config.cameras[0].start_check_seconds == 0.75
+    assert config.cameras[0].stop_timeout_seconds == 4.0
     assert config.cameras[1].kind == "v4l2" and config.cameras[1].device == "/dev/video2"
     assert config.segmentation.motion_threshold == 2.5
     assert config.segmentation.whole_clip_without_motion is False
+    assert config.segmentation.postprocess_timeout_seconds == 123.0
+    assert config.thermal.enabled is True
+    assert config.thermal.port == "/dev/serial/by-id/thermal-node"
+    assert config.thermal.baudrate == 460800
+    assert config.thermal.max_capture_seconds == 240.0
 
 
 def test_repository_configs_are_valid() -> None:
@@ -93,6 +110,8 @@ def test_repository_configs_are_valid() -> None:
         ("[cameras.fridge]\nrotation = 45", "camera rotation"),
         ("[segmentation]\nmotion_threshold = -1", "segmentation"),
         ('[ml]\nmode = "demo"', "ml.mode"),
+        ("[thermal]\nbaudrate = 0", "thermal baudrate"),
+        ("[thermal]\nstop_timeout_seconds = 0", "thermal timing"),
     ],
 )
 def test_reject_invalid_hardware_config(tmp_path: Path, setting: str, message: str) -> None:

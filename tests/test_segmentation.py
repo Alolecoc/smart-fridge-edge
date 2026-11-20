@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 from dataclasses import replace
@@ -88,6 +89,11 @@ def test_whole_recording_is_queued_without_motion_cutting(
     clip = make_clip(staging / "fridge.mp4")
     metadata = staging / "metadata.json"
     metadata.write_text('{"event_id": "event-1"}')
+    thermal = staging / "thermal"
+    thermal.mkdir()
+    summary = thermal / "summary.json"
+    summary.write_text('{"event_id":"event-1","frames":4}')
+    (thermal / "frames.jsonl").write_text('{"seq":0}\n')
     opened = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
     event = EventResult(
         event_id="event-1",
@@ -96,6 +102,7 @@ def test_whole_recording_is_queued_without_motion_cutting(
         door_opened_at=opened,
         door_closed_at=opened,
         recordings=(Recording("fridge", clip, opened),),
+        thermal_summary=summary,
     )
 
     def unexpected(*args: object, **kwargs: object) -> None:
@@ -110,14 +117,19 @@ def test_whole_recording_is_queued_without_motion_cutting(
     with database.connect() as connection:
         capture = connection.execute("SELECT * FROM captures").fetchone()
         recording = connection.execute("SELECT * FROM recordings").fetchone()
-    payload = capture["input_json"]
-    assert '"camera": "fridge"' in payload and '"schema_version": 2' in payload
+    payload = json.loads(capture["input_json"])
+    assert payload["camera"] == "fridge" and payload["schema_version"] == 2
+    assert payload["sensor_metadata"]["thermal"]["frames"] == 4
+    assert {item["name"] for item in payload["attachments"]} == {
+        "frames.jsonl",
+        "summary.json",
+    }
+    assert all(Path(item["path"]).is_file() for item in payload["attachments"])
     assert capture["mode"] == "test"
     assert recording["status"] == "queued_whole" and recording["kept"] == 1
     assert Path(recording["path"]).is_file()  # Test mode keeps the full recording.
-    start = float(payload.split('"offset_seconds": ')[1].split(",")[0])
-    assert start == 0.0
-    assert '"whole_recording": true' in payload
+    assert payload["offset_seconds"] == 0.0
+    assert payload["segment"]["whole_recording"] is True
 
 
 @needs_ffmpeg

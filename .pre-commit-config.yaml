@@ -43,6 +43,6 @@ repos:
         name: run type checks and tests
         entry: python scripts/run_pre_push.py
         language: python
-        additional_dependencies: ["mypy==2.3.1", "pytest==9.1.1"]
+        additional_dependencies: ["mypy==2.3.1", "pytest==9.1.1", "pyserial>=3.5"]
         stages: [pre-push]
         pass_filenames: false

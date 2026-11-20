@@ -8,6 +8,7 @@ from smart_fridge.hardware.simulated import (
     SimulatedDoorSensor,
     SimulatedLighting,
     SimulatedRecorder,
+    SimulatedThermalNode,
 )
 from smart_fridge.orchestrator import DebouncedDoor, Orchestrator, SystemState
 
@@ -26,6 +27,11 @@ class BrokenStopRecorder(SimulatedRecorder):
     def stop(self) -> Path:
         self.recording = None
         raise RuntimeError("file not finalized")
+
+
+class FailingThermalNode(SimulatedThermalNode):
+    def start(self, event_id: str, destination: Path) -> None:
+        raise RuntimeError("thermal unavailable")
 
 
 class FakeClock:
@@ -62,6 +68,91 @@ def test_records_every_camera_while_the_door_is_open(tmp_path: Path) -> None:
     assert result.door_opened_at <= result.recordings[0].started_at
     assert not lighting.enabled
     assert system.state is SystemState.IDLE
+
+
+def test_thermal_uses_same_event_and_finishes_with_cameras(tmp_path: Path) -> None:
+    door = SimulatedDoorSensor()
+    thermal = SimulatedThermalNode()
+    system = Orchestrator(
+        door,
+        SimulatedLighting(),
+        [SimulatedRecorder()],
+        tmp_path,
+        thermal=thermal,
+    )
+
+    door.open = True
+    system.poll()
+    assert thermal.active_event == system.event_id
+    door.open = False
+    result = system.poll()
+
+    assert result is not None and result.thermal_summary is not None
+    assert result.thermal_summary.is_file()
+    assert json.loads(result.thermal_summary.read_text())["event_id"] == result.event_id
+    metadata = json.loads(result.metadata_path.read_text())
+    assert metadata["thermal"]["status"] == "captured"
+    assert thermal.starts == thermal.stops == 1
+
+
+def test_thermal_failure_does_not_stop_rgb_recording(tmp_path: Path) -> None:
+    door = SimulatedDoorSensor()
+    recorder = SimulatedRecorder()
+    system = Orchestrator(
+        door,
+        SimulatedLighting(),
+        [recorder],
+        tmp_path,
+        thermal=FailingThermalNode(),
+    )
+
+    door.open = True
+    system.poll()
+    assert system.state is SystemState.RECORDING
+    assert recorder.recording is not None
+    door.open = False
+    result = system.poll()
+
+    assert result is not None and len(result.recordings) == 1
+    assert result.errors == ("thermal: thermal unavailable",)
+    assert json.loads(result.metadata_path.read_text())["status"] == "partial"
+
+
+def test_close_time_is_sensor_time_not_postprocessing_time(tmp_path: Path) -> None:
+    times = iter(
+        [
+            datetime(2026, 11, 16, 10, 0, 0, tzinfo=UTC),
+            datetime(2026, 11, 16, 10, 0, 1, tzinfo=UTC),
+            datetime(2026, 11, 16, 10, 0, 2, tzinfo=UTC),
+            datetime(2026, 11, 16, 10, 5, 0, tzinfo=UTC),
+        ]
+    )
+    door = SimulatedDoorSensor(open=True)
+    system = Orchestrator(
+        door,
+        SimulatedLighting(),
+        [SimulatedRecorder()],
+        tmp_path,
+        clock=lambda: next(times),
+    )
+    system.poll()
+    door.open = False
+    result = system.poll()
+    assert result is not None
+    assert result.door_closed_at == datetime(2026, 11, 16, 10, 0, 2, tzinfo=UTC)
+
+
+def test_recording_carries_rotation_to_background_processor(tmp_path: Path) -> None:
+    door = SimulatedDoorSensor(open=True)
+    recorder = SimulatedRecorder(rotation=90)
+    system = Orchestrator(door, SimulatedLighting(), [recorder], tmp_path)
+    system.poll()
+    door.open = False
+    result = system.poll()
+    assert result is not None
+    assert result.recordings[0].rotation == 90
+    metadata = json.loads(result.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["recordings"][0]["rotation"] == 90
 
 
 def test_idle_poll_does_nothing(tmp_path: Path) -> None:

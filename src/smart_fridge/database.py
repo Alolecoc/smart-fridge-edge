@@ -6,7 +6,7 @@ import json
 import math
 import shutil
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -190,6 +190,7 @@ class Database:
         offset_seconds: float = 0.0,
         segment: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        attachments: Sequence[Path] = (),
         move: bool = False,
     ) -> str:
         """Move or copy one clip into managed storage and queue it for ML (schema 2)."""
@@ -208,6 +209,18 @@ class Database:
         try:
             target = folder / ("clip" + video.suffix.lower())
             (shutil.move if move else shutil.copy2)(video, target)
+            attachment_records: list[dict[str, str]] = []
+            if attachments:
+                attachment_directory = folder / "attachments"
+                attachment_directory.mkdir()
+                for attachment in attachments:
+                    if not attachment.is_file():
+                        raise ValueError(f"missing attachment: {attachment}")
+                    attachment_target = attachment_directory / attachment.name
+                    shutil.copy2(attachment, attachment_target)
+                    attachment_records.append(
+                        {"name": attachment.name, "path": str(attachment_target)}
+                    )
             payload = {
                 "schema_version": 2,
                 "capture_id": capture_id,
@@ -218,7 +231,7 @@ class Database:
                 "offset_seconds": round(offset_seconds, 3),
                 "segment": segment or {},
                 "sensor_metadata": metadata or {},
-                "attachments": [],
+                "attachments": attachment_records,
             }
             with self.connect() as connection:
                 connection.execute(
@@ -258,6 +271,49 @@ class Database:
                 (run_id, row["capture_id"], row["event_id"], row["mode"], now(), str(folder)),
             )
             return {**dict(row), "run_id": run_id, "artifact_directory": str(folder)}
+
+    def capture_status(self, capture_id: str | None = None) -> dict[str, Any] | None:
+        """Return one capture and its latest inference run, newest capture by default."""
+        with self.connect() as connection:
+            parameters: tuple[str, ...] = ()
+            where = ""
+            if capture_id is not None:
+                where = "WHERE c.capture_id = ?"
+                parameters = (capture_id,)
+            row = connection.execute(
+                f"""SELECT c.capture_id, c.event_id, c.mode, c.created_at,
+                c.status, c.error, c.purged_at, r.run_id, r.status AS run_status,
+                r.started_at, r.completed_at, r.error AS run_error
+                FROM captures c LEFT JOIN inference_runs r ON r.run_id = (
+                    SELECT run_id FROM inference_runs
+                    WHERE capture_id = c.capture_id ORDER BY started_at DESC LIMIT 1
+                ) {where} ORDER BY c.created_at DESC LIMIT 1""",
+                parameters,
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def retry(self, capture_id: str | None = None) -> str:
+        """Put one failed capture back in the queue after verifying its video remains."""
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            parameters: tuple[str, ...] = ()
+            query = "SELECT * FROM captures WHERE status = 'failed' AND purged_at IS NULL"
+            if capture_id is not None:
+                query += " AND capture_id = ?"
+                parameters = (capture_id,)
+            row = connection.execute(
+                query + " ORDER BY created_at DESC LIMIT 1", parameters
+            ).fetchone()
+            if row is None:
+                raise ValueError("no matching failed capture is available to retry")
+            video = Path(json.loads(row["input_json"])["video_path"])
+            if not video.is_file():
+                raise ValueError(f"capture video is missing: {video}")
+            connection.execute(
+                "UPDATE captures SET status = 'pending', error = NULL WHERE capture_id = ?",
+                (row["capture_id"],),
+            )
+            return str(row["capture_id"])
 
     def export_acquisition(self, destination: Path) -> None:
         """Export persistent predictions for review without giving ML write access to SQLite."""
