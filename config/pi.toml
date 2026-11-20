@@ -19,6 +19,15 @@ pull_up = true
 debounce_seconds = 0.05
 poll_interval_seconds = 0.01
 
+[thermal]
+# Prefer a stable /dev/serial/by-id path once the ESP has been connected.
+enabled = true
+port = "auto"
+baudrate = 460800
+start_timeout_seconds = 2.0
+stop_timeout_seconds = 5.0
+max_capture_seconds = 300.0
+
 # Names must match the cameras in the ML repo's configs/video.yaml (fridge, door).
 # kind = "rpicam": Pi camera module on CSI port `index` (see: rpicam-hello --list-cameras)
 # kind = "v4l2":   USB camera at `device`, for example "/dev/video0"

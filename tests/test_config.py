@@ -65,6 +65,13 @@ device = "/dev/video2"
 motion_threshold = 2.5
 whole_clip_without_motion = false
 postprocess_timeout_seconds = 123.0
+[thermal]
+enabled = true
+port = "/dev/serial/by-id/thermal-node"
+baudrate = 460800
+start_timeout_seconds = 1.5
+stop_timeout_seconds = 4.0
+max_capture_seconds = 240.0
 """.strip(),
         encoding="utf-8",
     )
@@ -78,6 +85,10 @@ postprocess_timeout_seconds = 123.0
     assert config.segmentation.motion_threshold == 2.5
     assert config.segmentation.whole_clip_without_motion is False
     assert config.segmentation.postprocess_timeout_seconds == 123.0
+    assert config.thermal.enabled is True
+    assert config.thermal.port == "/dev/serial/by-id/thermal-node"
+    assert config.thermal.baudrate == 460800
+    assert config.thermal.max_capture_seconds == 240.0
 
 
 def test_repository_configs_are_valid() -> None:
@@ -99,6 +110,8 @@ def test_repository_configs_are_valid() -> None:
         ("[cameras.fridge]\nrotation = 45", "camera rotation"),
         ("[segmentation]\nmotion_threshold = -1", "segmentation"),
         ('[ml]\nmode = "demo"', "ml.mode"),
+        ("[thermal]\nbaudrate = 0", "thermal baudrate"),
+        ("[thermal]\nstop_timeout_seconds = 0", "thermal timing"),
     ],
 )
 def test_reject_invalid_hardware_config(tmp_path: Path, setting: str, message: str) -> None:

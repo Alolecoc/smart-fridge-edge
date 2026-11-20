@@ -28,3 +28,19 @@ class VideoRecorder(Protocol):
 
     def stop(self) -> Path:
         """Finish the file cleanly and return its path."""
+
+
+class ThermalNode(Protocol):
+    """Optional thermal capture node controlled by the event orchestrator."""
+
+    def start(self, event_id: str, destination: Path) -> None:
+        """Start collecting thermal frames for one door event."""
+
+    def stop(self, event_id: str) -> Path:
+        """Stop collecting and return the thermal summary path."""
+
+    def status(self) -> dict[str, object]:
+        """Return the node's latest reported status."""
+
+    def close(self) -> None:
+        """Release the transport."""

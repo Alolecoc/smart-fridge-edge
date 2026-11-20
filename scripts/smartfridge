@@ -29,6 +29,7 @@ Operating mode
 Hardware checks
   check door [seconds]           Watch GPIO17 open/closed changes (default 60)
   check cameras                  Record and verify both cameras
+  check thermal                  Query the ESP thermal node over USB serial
 
 Review tool
   review                         Explain the tool, show URLs and status
@@ -98,6 +99,14 @@ case "${1:-}" in
             camera|cameras)
                 [ "$#" -eq 2 ] || { usage >&2; exit 2; }
                 exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --check-cameras
+                ;;
+            thermal)
+                [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+                if /usr/bin/systemctl is-active --quiet smart-fridge.service; then
+                    echo "stop smart-fridge.service before opening its thermal serial port" >&2
+                    exit 1
+                fi
+                exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" --check-thermal
                 ;;
             *) usage >&2; exit 2 ;;
         esac

@@ -28,8 +28,13 @@ service, `smartfridge clear live|acq|test` deletes the selected mode's managed
 recordings and database records while preserving the other modes.
 
 Useful runtime diagnostics are `smartfridge logs`, `smartfridge event [capture-id]`,
-and `smartfridge config`. A failed ML job whose managed video still exists can be put
+`smartfridge config`, and `smartfridge check thermal`. A failed ML job whose managed video still exists can be put
 back in the queue with `smartfridge retry [capture-id]` (the latest is the default).
+
+The optional ESP32-P4 thermal node starts and stops with the same door event as the
+RGB cameras. Its frames and summary are copied into each queued ML capture. See
+[Thermal node integration](docs/thermal-node.md) for wiring, configuration, checks,
+the serial protocol and failure behaviour.
 
 Model training and large datasets belong in the separate `grocery-product-detection`
 repository. This repository only consumes its exported models through `main.py`.
@@ -38,6 +43,7 @@ repository. This repository only consumes its exported models through `main.py`.
 
 ```text
 Door switch (GPIO) -> Orchestrator -> rpicam-vid per camera (while open)
+                          |      \-> ESP thermal node over USB serial
                           |
                           +-> post-processing thread -> SQLite queue -> ML subprocess
                                                                   -> predictions + movements

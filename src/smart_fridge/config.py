@@ -36,6 +36,18 @@ class DoorConfig:
 
 
 @dataclass(frozen=True)
+class ThermalConfig:
+    """Optional ESP thermal node connected over USB serial."""
+
+    enabled: bool = False
+    port: str = "auto"
+    baudrate: int = 460800
+    start_timeout_seconds: float = 2.0
+    stop_timeout_seconds: float = 5.0
+    max_capture_seconds: float = 300.0
+
+
+@dataclass(frozen=True)
 class CameraConfig:
     """One video camera. The name must match a camera in the ML video configuration."""
 
@@ -81,6 +93,7 @@ class AppConfig:
     camera_count: int
     ml: MLConfig = field(default_factory=MLConfig)
     door: DoorConfig = field(default_factory=DoorConfig)
+    thermal: ThermalConfig = field(default_factory=ThermalConfig)
     cameras: tuple[CameraConfig, ...] = DEFAULT_CAMERAS
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
 
@@ -138,6 +151,23 @@ def load_config(path: Path) -> AppConfig:
         ),
     )
 
+    thermal = _table(document, "thermal")
+    thermal_defaults = ThermalConfig()
+    thermal_config = ThermalConfig(
+        enabled=bool(thermal.get("enabled", thermal_defaults.enabled)),
+        port=str(thermal.get("port", thermal_defaults.port)),
+        baudrate=int(thermal.get("baudrate", thermal_defaults.baudrate)),
+        start_timeout_seconds=float(
+            thermal.get("start_timeout_seconds", thermal_defaults.start_timeout_seconds)
+        ),
+        stop_timeout_seconds=float(
+            thermal.get("stop_timeout_seconds", thermal_defaults.stop_timeout_seconds)
+        ),
+        max_capture_seconds=float(
+            thermal.get("max_capture_seconds", thermal_defaults.max_capture_seconds)
+        ),
+    )
+
     cameras = _table(document, "cameras")
     camera_configs: tuple[CameraConfig, ...] = DEFAULT_CAMERAS
     if cameras:
@@ -174,6 +204,7 @@ def load_config(path: Path) -> AppConfig:
         camera_count=int(system.get("camera_count", 1)),
         ml=ml_config,
         door=door_config,
+        thermal=thermal_config,
         cameras=camera_configs,
         segmentation=segmentation_config,
     )
@@ -202,6 +233,16 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("door.open_level must be high or low")
     if door.debounce_seconds < 0 or door.poll_interval_seconds <= 0:
         raise ValueError("door timing values must be positive")
+    thermal = config.thermal
+    if thermal.baudrate <= 0:
+        raise ValueError("thermal baudrate must be positive")
+    thermal_timings = (
+        thermal.start_timeout_seconds,
+        thermal.stop_timeout_seconds,
+        thermal.max_capture_seconds,
+    )
+    if any(not math.isfinite(value) or value <= 0 for value in thermal_timings):
+        raise ValueError("thermal timing values must be finite and positive")
     names = [camera.name for camera in config.cameras]
     if not names or len(names) != len(set(names)):
         raise ValueError("configure at least one camera, each with a unique name")

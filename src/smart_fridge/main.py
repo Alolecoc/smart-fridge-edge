@@ -11,7 +11,7 @@ from pathlib import Path
 
 from smart_fridge.config import AppConfig, load_config
 from smart_fridge.events import EventProcessor
-from smart_fridge.hardware.interfaces import DoorSensor, VideoRecorder
+from smart_fridge.hardware.interfaces import DoorSensor, ThermalNode, VideoRecorder
 from smart_fridge.hardware.simulated import (
     SimulatedDoorSensor,
     SimulatedLighting,
@@ -54,6 +54,9 @@ def main() -> None:
     )
     action.add_argument(
         "--check-cameras", action="store_true", help="Record 3 s from every camera."
+    )
+    action.add_argument(
+        "--check-thermal", action="store_true", help="Connect to the ESP and print its status."
     )
     action.add_argument(
         "--analyse-motion", type=Path, help="Print motion levels and segments of a clip."
@@ -99,6 +102,9 @@ def main() -> None:
         return
     if arguments.check_cameras:
         check_cameras(config)
+        return
+    if arguments.check_thermal:
+        check_thermal(config)
         return
     if arguments.analyse_motion:
         analyse_motion(config, arguments.analyse_motion)
@@ -173,6 +179,15 @@ def make_hardware(config: AppConfig) -> tuple[DoorSensor, list[VideoRecorder]]:
     return GpioDoorSensor(config.door), [ProcessRecorder(camera) for camera in config.cameras]
 
 
+def make_thermal(config: AppConfig) -> ThermalNode | None:
+    """Create the optional ESP thermal transport only when configured."""
+    if not config.thermal.enabled:
+        return None
+    from smart_fridge.hardware.thermal_serial import SerialThermalNode
+
+    return SerialThermalNode(config.thermal)
+
+
 def run_live(
     config: AppConfig,
     service: MLService,
@@ -186,12 +201,18 @@ def run_live(
             raise SystemExit("--run needs real hardware: set simulated_hardware = false")
         hardware = make_hardware(config)
     raw_door, recorders = hardware
+    try:
+        thermal = make_thermal(config)
+    except Exception:
+        thermal = None
+        logger.exception("thermal node unavailable; RGB-only operation continues")
     door = DebouncedDoor(raw_door, config.door.debounce_seconds)
     system = Orchestrator(
         door,
         SimulatedLighting(),  # No controllable lighting is installed yet.
         recorders,
         config.ml.database_directory / "staging",
+        thermal=thermal,
         wait_after_close_seconds=config.wait_after_close_seconds,
         max_recording_seconds=config.segmentation.max_recording_seconds,
     )
@@ -239,6 +260,8 @@ def run_live(
         service.stop_event.set()
         ml_queue.join()
         service.stop()
+        if thermal is not None:
+            thermal.close()
 
 
 def submit(
@@ -313,6 +336,18 @@ def check_cameras(config: AppConfig) -> None:
             print(f"{recorder.name}: FAILED - {error}")
     if failures:
         raise SystemExit(1)
+
+
+def check_thermal(config: AppConfig) -> None:
+    """Verify that the ESP serial protocol responds without starting a door event."""
+    if not config.thermal.enabled:
+        raise SystemExit("thermal is disabled in the selected configuration")
+    thermal = make_thermal(config)
+    assert thermal is not None
+    try:
+        print(json.dumps(thermal.status(), indent=2))
+    finally:
+        thermal.close()
 
 
 def analyse_motion(config: AppConfig, clip: Path) -> None:

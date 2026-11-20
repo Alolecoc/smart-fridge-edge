@@ -6,7 +6,7 @@ import json
 import math
 import shutil
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -190,6 +190,7 @@ class Database:
         offset_seconds: float = 0.0,
         segment: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        attachments: Sequence[Path] = (),
         move: bool = False,
     ) -> str:
         """Move or copy one clip into managed storage and queue it for ML (schema 2)."""
@@ -208,6 +209,18 @@ class Database:
         try:
             target = folder / ("clip" + video.suffix.lower())
             (shutil.move if move else shutil.copy2)(video, target)
+            attachment_records: list[dict[str, str]] = []
+            if attachments:
+                attachment_directory = folder / "attachments"
+                attachment_directory.mkdir()
+                for attachment in attachments:
+                    if not attachment.is_file():
+                        raise ValueError(f"missing attachment: {attachment}")
+                    attachment_target = attachment_directory / attachment.name
+                    shutil.copy2(attachment, attachment_target)
+                    attachment_records.append(
+                        {"name": attachment.name, "path": str(attachment_target)}
+                    )
             payload = {
                 "schema_version": 2,
                 "capture_id": capture_id,
@@ -218,7 +231,7 @@ class Database:
                 "offset_seconds": round(offset_seconds, 3),
                 "segment": segment or {},
                 "sensor_metadata": metadata or {},
-                "attachments": [],
+                "attachments": attachment_records,
             }
             with self.connect() as connection:
                 connection.execute(

@@ -28,6 +28,13 @@ class EventProcessor:
         metadata: dict[str, Any] = json.loads(event.metadata_path.read_text(encoding="utf-8"))
         metadata["mode"] = self.mode
         self.database.record_event(event.event_id, metadata)
+        thermal_metadata: dict[str, Any] = {}
+        thermal_attachments: tuple[Path, ...] = ()
+        if event.thermal_summary is not None and event.thermal_summary.is_file():
+            thermal_metadata = json.loads(event.thermal_summary.read_text(encoding="utf-8"))
+            thermal_attachments = tuple(
+                sorted(path for path in event.thermal_summary.parent.iterdir() if path.is_file())
+            )
         # Acquisition and test keep whole recordings for later study; production keeps
         # only the queued segments, which the retention policy purges.
         keep = self.mode != "production"
@@ -40,7 +47,15 @@ class EventProcessor:
                 if keep and not keep_sources:
                     archive.mkdir(parents=True, exist_ok=True)
                     path = Path(shutil.move(recording.path, archive / recording.path.name))
-                captures += self._queue_recording(event, recording, path, keep, keep_sources)
+                captures += self._queue_recording(
+                    event,
+                    recording,
+                    path,
+                    keep,
+                    keep_sources,
+                    thermal_metadata,
+                    thermal_attachments,
+                )
             except Exception as error:
                 self.logger.exception("could not segment %s", recording.camera)
                 # Never lose the footage when segmentation fails.
@@ -115,7 +130,14 @@ class EventProcessor:
         return path
 
     def _queue_recording(
-        self, event: EventResult, recording: Recording, path: Path, keep: bool, keep_sources: bool
+        self,
+        event: EventResult,
+        recording: Recording,
+        path: Path,
+        keep: bool,
+        keep_sources: bool,
+        thermal_metadata: dict[str, Any],
+        thermal_attachments: tuple[Path, ...],
     ) -> list[str]:
         config = self.segmentation
         duration = video_duration(path)
@@ -136,6 +158,8 @@ class EventProcessor:
                 captured_at=recording.started_at.isoformat(),
                 offset_seconds=start_offset,
                 segment=segment,
+                metadata={"thermal": thermal_metadata} if thermal_metadata else None,
+                attachments=thermal_attachments,
                 move=not (keep or keep_sources),
             )
             self.database.add_recording(
@@ -165,6 +189,8 @@ class EventProcessor:
                 captured_at=(recording.started_at + timedelta(seconds=start)).isoformat(),
                 offset_seconds=start_offset + start,
                 segment={"index": index, "start": start, "end": end, "recording": path.name},
+                metadata={"thermal": thermal_metadata} if thermal_metadata else None,
+                attachments=thermal_attachments,
                 move=True,
             )
             captures.append(capture_id)

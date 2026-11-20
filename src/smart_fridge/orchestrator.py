@@ -11,7 +11,7 @@ from enum import Enum, auto
 from pathlib import Path
 from uuid import uuid4
 
-from smart_fridge.hardware.interfaces import DoorSensor, Lighting, VideoRecorder
+from smart_fridge.hardware.interfaces import DoorSensor, Lighting, ThermalNode, VideoRecorder
 
 
 class SystemState(Enum):
@@ -38,6 +38,7 @@ class EventResult:
     door_opened_at: datetime
     door_closed_at: datetime
     recordings: tuple[Recording, ...]
+    thermal_summary: Path | None = None
     errors: tuple[str, ...] = ()
 
 
@@ -76,6 +77,7 @@ class Orchestrator:
         lighting: Lighting,
         recorders: Sequence[VideoRecorder],
         data_directory: Path,
+        thermal: ThermalNode | None = None,
         wait_after_close_seconds: float = 0.0,
         max_recording_seconds: float = 300.0,
         clock: Callable[[], datetime] | None = None,
@@ -86,6 +88,7 @@ class Orchestrator:
         self.lighting = lighting
         self.recorders = recorders
         self.data_directory = data_directory
+        self.thermal = thermal
         self.wait_after_close_seconds = wait_after_close_seconds
         self.max_recording_seconds = max_recording_seconds
         self.clock = clock or (lambda: datetime.now(UTC))
@@ -97,6 +100,7 @@ class Orchestrator:
         self.door_opened_at: datetime | None = None
         self.recording_since = 0.0
         self.active: list[tuple[VideoRecorder, datetime]] = []
+        self.event_errors: list[str] = []
         self.logger = logging.getLogger(__name__)
 
     def poll(self) -> EventResult | None:
@@ -132,6 +136,7 @@ class Orchestrator:
         self.event_directory = self.data_directory / self.event_id
         self.event_directory.mkdir(parents=True, exist_ok=False)
         self.recording_since = self.monotonic()
+        self.event_errors = []
         self.logger.info("door OPEN detected", extra={"event_id": self.event_id})
         self.lighting.turn_on()
         try:
@@ -151,6 +156,15 @@ class Orchestrator:
             self._write_metadata(self.clock(), [], [str(error)], "failed")
             self.logger.exception("recording failed to start", extra={"event_id": self.event_id})
             raise
+        if self.thermal is not None:
+            try:
+                self.thermal.start(self.event_id, self.event_directory / "thermal")
+            except Exception as error:
+                self.event_errors.append(f"thermal: {error}")
+                self.logger.exception(
+                    "thermal capture unavailable; RGB recording continues",
+                    extra={"event_id": self.event_id},
+                )
         self._transition(SystemState.RECORDING, "all cameras started")
 
     def finish(self, reason: str, closed_at: datetime | None = None) -> EventResult:
@@ -158,14 +172,23 @@ class Orchestrator:
         assert self.event_id is not None and self.event_directory is not None
         assert self.door_opened_at is not None
         recordings: list[Recording] = []
-        errors: list[str] = []
+        errors: list[str] = list(self.event_errors)
+        thermal_summary: Path | None = None
         # Signal/finalize all cameras concurrently. A slow MP4 finalization on one
         # camera must not leave another camera recording after the door closed.
-        with ThreadPoolExecutor(max_workers=max(1, len(self.active))) as executor:
+        with ThreadPoolExecutor(
+            max_workers=max(1, len(self.active) + int(self.thermal is not None))
+        ) as executor:
             futures = {
                 executor.submit(recorder.stop): (index, recorder, started_at)
                 for index, (recorder, started_at) in enumerate(self.active)
             }
+            thermal_future = (
+                executor.submit(self.thermal.stop, self.event_id)
+                if self.thermal is not None
+                and not any(error.startswith("thermal:") for error in self.event_errors)
+                else None
+            )
             completed: list[tuple[int, Recording]] = []
             for future in as_completed(futures):
                 index, recorder, started_at = futures[future]
@@ -183,11 +206,22 @@ class Orchestrator:
                     errors.append(f"{recorder.name}: {error}")
                     self.logger.exception("camera %s failed", recorder.name)
             recordings = [recording for _, recording in sorted(completed)]
+            if thermal_future is not None:
+                try:
+                    thermal_summary = thermal_future.result()
+                    self.logger.info("thermal capture finalized", extra={"event_id": self.event_id})
+                except Exception as error:
+                    errors.append(f"thermal: {error}")
+                    self.logger.exception(
+                        "thermal capture failed to finalize", extra={"event_id": self.event_id}
+                    )
         self.active = []
         self.lighting.turn_off()
         closed_at = closed_at or self.clock()
         status = "recorded" if recordings and not errors else "partial" if recordings else "failed"
-        metadata_path = self._write_metadata(closed_at, recordings, errors, status, reason)
+        metadata_path = self._write_metadata(
+            closed_at, recordings, errors, status, reason, thermal_summary
+        )
         self.logger.info(
             "all camera captures finalized (%s)",
             reason,
@@ -200,6 +234,7 @@ class Orchestrator:
             door_opened_at=self.door_opened_at,
             door_closed_at=closed_at,
             recordings=tuple(recordings),
+            thermal_summary=thermal_summary,
             errors=tuple(errors),
         )
         self._transition(SystemState.IDLE, "event queued for background processing")
@@ -223,6 +258,7 @@ class Orchestrator:
         errors: list[str],
         status: str,
         reason: str = "",
+        thermal_summary: Path | None = None,
     ) -> Path:
         assert self.event_directory is not None and self.door_opened_at is not None
         document: dict[str, object] = {
@@ -242,6 +278,14 @@ class Orchestrator:
                 for item in recordings
             ],
             "errors": errors,
+            "thermal": {
+                "status": "captured" if thermal_summary is not None else "unavailable",
+                "summary": (
+                    str(thermal_summary.relative_to(self.event_directory))
+                    if thermal_summary is not None
+                    else None
+                ),
+            },
         }
         path = self.event_directory / "metadata.json"
         temporary_path = path.with_suffix(".json.tmp")
