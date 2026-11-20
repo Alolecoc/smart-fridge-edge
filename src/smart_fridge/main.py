@@ -59,6 +59,9 @@ def main() -> None:
         "--check-thermal", action="store_true", help="Connect to the ESP and print its status."
     )
     action.add_argument(
+        "--thermal-live", action="store_true", help="Show live thermal frames in a browser."
+    )
+    action.add_argument(
         "--analyse-motion", type=Path, help="Print motion levels and segments of a clip."
     )
     action.add_argument(
@@ -74,6 +77,8 @@ def main() -> None:
     parser.add_argument("--camera", help="Camera name for --submit (fridge or door).")
     parser.add_argument("--pin", type=int, help="BCM GPIO pin for --check-door.")
     parser.add_argument("--seconds", type=float, default=60.0, help="Duration of --check-door.")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind address for --thermal-live.")
+    parser.add_argument("--port", type=int, default=9001, help="Port for --thermal-live.")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--data-aquisition", "--data-acquisition", dest="acquisition", action="store_true"
@@ -105,6 +110,11 @@ def main() -> None:
         return
     if arguments.check_thermal:
         check_thermal(config)
+        return
+    if arguments.thermal_live:
+        from smart_fridge.thermal_live import run_thermal_live
+
+        run_thermal_live(config.thermal, arguments.host, arguments.port)
         return
     if arguments.analyse_motion:
         analyse_motion(config, arguments.analyse_motion)

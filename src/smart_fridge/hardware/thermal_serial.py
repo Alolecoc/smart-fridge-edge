@@ -56,6 +56,7 @@ class SerialThermalNode:
         self.frames_file: TextIO | None = None
         self.frame_count = 0
         self.dropped = 0
+        self._latest_frame: dict[str, Any] | None = None
         self.last_status: dict[str, object] = {"state": "connected", "port": self.port}
         self.reader = threading.Thread(target=self._read_loop, name="thermal-serial", daemon=True)
         self.reader.start()
@@ -109,6 +110,11 @@ class SerialThermalNode:
         response = self._command("status", self.config.start_timeout_seconds)
         self.last_status = {**response, "port": self.port}
         return self.last_status
+
+    def latest_frame(self) -> dict[str, Any] | None:
+        """Return a snapshot of the most recently received thermal frame."""
+        with self.lock:
+            return dict(self._latest_frame) if self._latest_frame is not None else None
 
     def close(self) -> None:
         self._close_capture()
@@ -176,6 +182,7 @@ class SerialThermalNode:
                 return
             self.frames_file.write(json.dumps(message, separators=(",", ":")) + "\n")
             self.frames_file.flush()
+            self._latest_frame = dict(message)
             self.frame_count += 1
 
     def _close_capture(self) -> None:

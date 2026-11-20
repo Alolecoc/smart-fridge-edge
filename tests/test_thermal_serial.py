@@ -70,6 +70,7 @@ def test_serial_node_saves_frames_and_summary(
         assert json.loads(summary.read_text())["frames_received"] == 1
         frame = json.loads((tmp_path / "frames.jsonl").read_text())
         assert frame["event_id"] == "event-1" and frame["seq"] == 0
+        assert node.latest_frame() == frame
         assert node.status()["state"] == "idle"
     finally:
         node.close()
