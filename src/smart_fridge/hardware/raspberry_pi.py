@@ -41,6 +41,89 @@ class GpioDoorSensor:
         self.device.close()
 
 
+def capture_still(config: CameraConfig, destination: Path) -> Path:
+    """Save one JPEG photo using the configured size and rotation."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    capture = (
+        destination.with_name(f"{destination.stem}.unrotated.jpg")
+        if config.rotation in {90, 270}
+        else destination
+    )
+    ffmpeg = shutil.which("ffmpeg")
+    if config.kind == "rpicam":
+        executable = shutil.which("rpicam-still") or shutil.which("libcamera-still")
+        if executable is None:
+            raise RuntimeError("rpicam-still is missing; install rpicam-apps")
+        command = [
+            executable,
+            "--camera",
+            str(config.index),
+            "-t",
+            "1000",
+            "--width",
+            str(config.width),
+            "--height",
+            str(config.height),
+            "--nopreview",
+            "-o",
+            str(capture),
+        ]
+        if config.rotation == 180:
+            command[1:1] = ["--rotation", "180"]
+    elif config.kind == "v4l2":
+        if ffmpeg is None:
+            raise RuntimeError("ffmpeg is missing")
+        command = [
+            ffmpeg,
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "v4l2",
+            "-video_size",
+            f"{config.width}x{config.height}",
+            "-i",
+            config.device,
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            str(capture),
+        ]
+    else:
+        raise ValueError(f"camera kind {config.kind} cannot take photos")
+    finished = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    if finished.returncode != 0 or not capture.is_file():
+        raise RuntimeError(f"{config.name} photo failed: {finished.stderr.strip()[-500:]}")
+    if capture != destination:
+        if ffmpeg is None:
+            raise RuntimeError("ffmpeg is missing; cannot rotate the photo")
+        transpose = "clock" if config.rotation == 90 else "cclock"
+        subprocess.run(
+            [
+                ffmpeg,
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(capture),
+                "-vf",
+                f"transpose={transpose}",
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                str(destination),
+            ],
+            check=True,
+            timeout=30,
+        )
+        capture.unlink()
+    return destination
+
+
 class ProcessRecorder:
     """Record one camera with rpicam-vid (CSI camera) or ffmpeg (USB camera)."""
 

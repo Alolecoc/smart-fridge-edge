@@ -3,8 +3,11 @@ import json
 import logging
 import queue
 import signal
+import sys
+import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -62,6 +65,9 @@ def main() -> None:
         "--analyse-motion", type=Path, help="Print motion levels and segments of a clip."
     )
     action.add_argument(
+        "--capture-image", type=Path, help="Acquisition: save one still photo from --camera."
+    )
+    action.add_argument(
         "--event-status", nargs="?", const="latest", help="Show latest or specified capture state."
     )
     action.add_argument(
@@ -108,6 +114,11 @@ def main() -> None:
         return
     if arguments.analyse_motion:
         analyse_motion(config, arguments.analyse_motion)
+        return
+    if arguments.capture_image:
+        if config.ml.mode != "acquisition":
+            parser.error("--capture-image needs --data-acquisition")
+        capture_image(config, arguments.capture_image, arguments.camera)
         return
 
     service = MLService(config.ml)
@@ -201,8 +212,11 @@ def run_live(
             raise SystemExit("--run needs real hardware: set simulated_hardware = false")
         hardware = make_hardware(config)
     raw_door, recorders = hardware
+    # Acquisition is an intentional manual still-image mode. It does not consume
+    # the thermal serial port or react to the door switch in the background.
+    acquisition = config.ml.mode == "acquisition"
     try:
-        thermal = make_thermal(config)
+        thermal = None if acquisition else make_thermal(config)
     except Exception:
         thermal = None
         logger.exception("thermal node unavailable; RGB-only operation continues")
@@ -235,14 +249,15 @@ def run_live(
         stop = threading.Event()
         signal.signal(signal.SIGTERM, lambda *_: stop.set() if stop else None)
     logger.info(
-        "live in %s mode with cameras %s; waiting for the door",
+        "live in %s mode with cameras %s; %s",
         config.ml.mode,
         ", ".join(recorder.name for recorder in recorders),
+        "door recording is off" if acquisition else "waiting for the door",
     )
     try:
         while not stop.is_set():
             try:
-                result = system.poll()
+                result = None if acquisition else system.poll()
                 if result is not None:
                     events.put(result)
             except Exception:
@@ -348,6 +363,65 @@ def check_thermal(config: AppConfig) -> None:
         print(json.dumps(thermal.status(), indent=2))
     finally:
         thermal.close()
+
+
+def capture_image(config: AppConfig, destination: Path, camera_name: str | None) -> None:
+    """Take one RGB photo and one thermal frame without changing their destination."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    cameras = {camera.name: camera for camera in config.cameras}
+    camera = cameras.get(camera_name or config.cameras[0].name)
+    if camera is None:
+        raise SystemExit(f"--camera must be one of {list(cameras)}")
+    from smart_fridge.hardware.raspberry_pi import capture_still
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        thermal = (
+            executor.submit(capture_thermal_frame, config, destination.with_suffix(".thermal.json"))
+            if config.thermal.enabled
+            else None
+        )
+        print(capture_still(camera, destination))
+        if thermal is not None:
+            try:
+                print(thermal.result())
+            except Exception as error:
+                print(f"thermal: {error}", file=sys.stderr)
+
+
+def capture_thermal_frame(config: AppConfig, destination: Path) -> Path:
+    """Save the first frame of a short thermal capture as JSON."""
+    from smart_fridge.hardware.thermal_serial import SerialThermalNode
+
+    node = SerialThermalNode(config.thermal)
+    event_id = f"photo-{destination.stem}"
+    frame: dict[str, object] | None = None
+    try:
+        node.status()
+        with tempfile.TemporaryDirectory(prefix="smart-fridge-photo-") as directory:
+            capture_directory = Path(directory)
+            node.start(event_id, capture_directory)
+            try:
+                deadline = time.monotonic() + 5.0
+                while node.frame_count < 1 and time.monotonic() < deadline:
+                    time.sleep(0.05)
+            finally:
+                try:
+                    node.stop(event_id)
+                except Exception:
+                    logging.getLogger(__name__).exception("thermal stop failed after photo")
+            frames = capture_directory / "frames.jsonl"
+            if frames.is_file():
+                lines = frames.read_text(encoding="utf-8").splitlines()
+                if lines:
+                    decoded = json.loads(lines[-1])
+                    if isinstance(decoded, dict):
+                        frame = decoded
+    finally:
+        node.close()
+    if frame is None:
+        raise RuntimeError("no thermal frame within 5 s")
+    destination.write_text(json.dumps(frame, separators=(",", ":")) + "\n", encoding="utf-8")
+    return destination
 
 
 def analyse_motion(config: AppConfig, clip: Path) -> None:
