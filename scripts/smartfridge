@@ -2,6 +2,16 @@
 set -eu
 
 edge=/srv/smart-fridge/smart-fridge-edge
+mode_lock=/tmp/smartfridge-mode.lock
+
+open_mode_lock() {
+    if [ ! -e "$mode_lock" ]; then
+        (umask 000; : >"$mode_lock")
+    fi
+    # flock only needs a readable descriptor. This keeps the lock shared across
+    # admin, hugo and the other Pi accounts regardless of who created the file.
+    exec 9<"$mode_lock"
+}
 
 usage() {
     cat <<'EOF'
@@ -45,7 +55,7 @@ EOF
 case "${1:-}" in
     help|-h|--help) usage ;;
     start|restart)
-        exec 9>/tmp/smartfridge-mode.lock
+        open_mode_lock
         if ! flock -n 9; then
             echo "thermal-live is running; stop it with Ctrl+C first" >&2
             exit 1
@@ -122,7 +132,7 @@ case "${1:-}" in
         ;;
     thermal-live)
         [ "$#" -eq 1 ] || { usage >&2; exit 2; }
-        exec 9>/tmp/smartfridge-mode.lock
+        open_mode_lock
         if ! flock -n 9; then
             echo "thermal-live is already running or the fridge is starting" >&2
             exit 1
