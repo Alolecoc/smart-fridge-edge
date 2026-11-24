@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import tempfile
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -203,6 +204,12 @@ def run_thermal_live(config: ThermalConfig, host: str, port: int) -> None:
         raise SystemExit("thermal is disabled in the selected configuration")
     node = SerialThermalNode(config)
     event_id = f"thermal-live-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def stop_on_sigterm(_signum: int, _frame: object) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop_on_sigterm)
     with tempfile.TemporaryDirectory(prefix="smart-fridge-thermal-live-") as directory:
         try:
             node.status()
@@ -219,3 +226,4 @@ def run_thermal_live(config: ThermalConfig, host: str, port: int) -> None:
                 node.stop(event_id)
         finally:
             node.close()
+            signal.signal(signal.SIGTERM, previous_sigterm)
