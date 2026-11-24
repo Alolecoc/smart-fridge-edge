@@ -24,7 +24,7 @@ LIVE_PAGE = """<!doctype html>
     main { width: min(94vw, 980px); margin: 30px auto; }
     h1 { margin-bottom: 5px; }
     .sub { color: #9bb0c8; margin-top: 0; }
-    canvas { width: 100%; aspect-ratio: 4 / 3; image-rendering: pixelated;
+    canvas { width: 100%; height: auto; image-rendering: pixelated;
       background: #020713; border: 1px solid #29415d; border-radius: 14px; }
     .panel { display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
       padding: 16px 0; }
@@ -49,6 +49,8 @@ LIVE_PAGE = """<!doctype html>
     <div class="stat"><label>Mean</label><div class="value" id="mean">–</div></div>
     <div class="stat"><label>Maximum</label><div class="value" id="max">–</div></div>
     <div class="stat"><label>Frame</label><div class="value" id="seq">–</div></div>
+    <button id="rotate" type="button">↶ Rotate 90° counter-clockwise</button>
+    <span id="rotation">Rotation: 90° counter-clockwise</span>
     <label><input id="auto" type="checkbox" checked> automatic scale</label>
     <label>cold <input id="low" type="number" value="10" step="1"> °C</label>
     <label>hot <input id="high" type="number" value="40" step="1"> °C</label>
@@ -58,7 +60,25 @@ LIVE_PAGE = """<!doctype html>
 <script>
 const canvas = document.getElementById('view');
 const context = canvas.getContext('2d');
-const image = context.createImageData(32, 24);
+const source = document.createElement('canvas');
+source.width = 32;
+source.height = 24;
+const sourceContext = source.getContext('2d');
+const image = sourceContext.createImageData(32, 24);
+let rotation = 270;
+let latestFrame = null;
+
+document.getElementById('rotate').addEventListener('click', () => {
+  rotation = (rotation + 270) % 360;
+  const names = {
+    0: '0°',
+    90: '90° clockwise',
+    180: '180°',
+    270: '90° counter-clockwise'
+  };
+  document.getElementById('rotation').textContent = 'Rotation: ' + names[rotation];
+  if (latestFrame) draw(latestFrame);
+});
 let previousSequence = -1;
 
 function colour(value) {
@@ -77,6 +97,7 @@ function colour(value) {
 }
 
 function draw(frame) {
+  latestFrame = frame;
   const temperatures = frame.raw_u16.map(raw => raw / 128 - 64);
   const automatic = document.getElementById('auto').checked;
   const low = automatic ? frame.min_c : Number(document.getElementById('low').value);
@@ -85,14 +106,24 @@ function draw(frame) {
     const rgb = colour((temperature - low) / Math.max(.01, high - low));
     image.data.set([...rgb, 255], index * 4);
   });
-  context.putImageData(image, 0, 0);
+  sourceContext.putImageData(image, 0, 0);
   if (frame.hand && frame.centroid_x >= 0) {
-    context.beginPath();
-    context.arc(frame.centroid_x, frame.centroid_y, 2, 0, Math.PI * 2);
-    context.strokeStyle = 'white';
-    context.lineWidth = .35;
-    context.stroke();
+    sourceContext.beginPath();
+    sourceContext.arc(frame.centroid_x, frame.centroid_y, 2, 0, Math.PI * 2);
+    sourceContext.strokeStyle = 'white';
+    sourceContext.lineWidth = .35;
+    sourceContext.stroke();
   }
+  const sideways = rotation === 90 || rotation === 270;
+  canvas.width = sideways ? 24 : 32;
+  canvas.height = sideways ? 32 : 24;
+  context.save();
+  if (rotation === 90) context.translate(24, 0);
+  else if (rotation === 180) context.translate(32, 24);
+  else if (rotation === 270) context.translate(0, 32);
+  context.rotate(rotation * Math.PI / 180);
+  context.drawImage(source, 0, 0);
+  context.restore();
   document.getElementById('min').textContent = frame.min_c.toFixed(1) + ' °C';
   document.getElementById('mean').textContent = frame.mean_c.toFixed(1) + ' °C';
   document.getElementById('max').textContent = frame.max_c.toFixed(1) + ' °C';

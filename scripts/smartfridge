@@ -44,7 +44,15 @@ EOF
 
 case "${1:-}" in
     help|-h|--help) usage ;;
-    start|stop|restart) exec sudo -n /usr/bin/systemctl "$1" smart-fridge.service ;;
+    start|restart)
+        exec 9>/tmp/smartfridge-mode.lock
+        if ! flock -n 9; then
+            echo "thermal-live is running; stop it with Ctrl+C first" >&2
+            exit 1
+        fi
+        exec sudo -n /usr/bin/systemctl "$1" smart-fridge.service
+        ;;
+    stop) exec sudo -n /usr/bin/systemctl stop smart-fridge.service ;;
     status)
         echo "mode: $(cat /etc/smart-fridge/mode)"
         exec /usr/bin/systemctl --no-pager --full status smart-fridge.service
@@ -114,10 +122,16 @@ case "${1:-}" in
         ;;
     thermal-live)
         [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        exec 9>/tmp/smartfridge-mode.lock
+        if ! flock -n 9; then
+            echo "thermal-live is already running or the fridge is starting" >&2
+            exit 1
+        fi
         if /usr/bin/systemctl is-active --quiet smart-fridge.service; then
             echo "run 'smartfridge stop' before opening the thermal serial port" >&2
             exit 1
         fi
+        echo "Thermal live viewer: http://smartfridge.local:9001"
         exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" \
             --thermal-live --host 0.0.0.0 --port 9001
         ;;
