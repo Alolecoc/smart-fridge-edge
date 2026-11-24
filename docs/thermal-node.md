@@ -50,6 +50,17 @@ smartfridge stop
 smartfridge check thermal
 ```
 
+For an interactive blue-to-red heatmap, stop the live service and run:
+
+```bash
+smartfridge stop
+smartfridge thermal-live
+```
+
+Open `http://smartfridge:9001` from a computer on the same Tailscale network.
+The page shows the full 32x24 frame, temperatures, frame number and the detected
+warm-region centre. Press `Ctrl+C` in the terminal to close the capture cleanly.
+
 ## Serial protocol
 
 Each machine-readable line begins with `SF1 ` followed by one compact JSON
