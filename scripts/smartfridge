@@ -30,6 +30,7 @@ Hardware checks
   check door [seconds]           Watch GPIO17 open/closed changes (default 60)
   check cameras                  Record and verify both cameras
   check thermal                  Query the ESP thermal node over USB serial
+  capture-image PATH [camera]    Acquisition RGB photo plus thermal JSON
 
 Review tool
   review                         Explain the tool, show URLs and status
@@ -110,6 +111,15 @@ case "${1:-}" in
                 ;;
             *) usage >&2; exit 2 ;;
         esac
+        ;;
+    capture-image)
+        [ "$#" -ge 2 ] && [ "$#" -le 3 ] || { usage >&2; exit 2; }
+        if [ "$#" -eq 3 ]; then
+            exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" \
+                --data-acquisition --capture-image "$2" --camera "$3"
+        fi
+        exec "$edge/.venv/bin/python" "$edge/run.py" --config "$edge/config/pi.toml" \
+            --data-acquisition --capture-image "$2"
         ;;
     door-check)
         [ "$#" -le 2 ] || { usage >&2; exit 2; }
